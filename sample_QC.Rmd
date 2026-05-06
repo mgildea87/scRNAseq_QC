@@ -37,7 +37,8 @@ params:
 # Set global chunk defaults: suppress messages and warnings throughout
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
-qc_support_dir <- '/gpfs/data/cvrcbioinfolab/gildem01/analysis_Rmd_templates_and_scripts/scRNAseq/Seurat_V5/QC'
+template_dir <- normalizePath(knitr::current_input(dir = TRUE), mustWork = FALSE)
+qc_support_dir <- file.path(template_dir, 'support_files')
 
 find_qc_support_file <- function(filename) {
   file.path(qc_support_dir, filename)

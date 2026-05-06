@@ -5,16 +5,20 @@ each sample processed by CellRanger.
 Can be run on a single sample interactively or batched across many samples via
 a sample sheet.
 
+GitHub repository: https://github.com/mgildea87/scRNAseq_QC
+
 ---
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `sample_QC.Rmd` | Parameterised R Markdown template — do not edit paths directly |
+| `sample_QC.Rmd` | Parameterised R Markdown template for per-sample QC |
+| `merge_analysis.Rmd` | R Markdown template for post-merge analysis across samples |
 | `run_QC_batch.R` | Launcher script — renders the template for every row in a sample sheet |
 | `run_QC_batch_with_r.sh` | Wrapper that sources the CVRC R conda environment and runs `run_QC_batch.R` |
 | `samples.csv` | Sample sheet — edit this to point to your data |
+| `support_files/` | Bundled TF and haemoglobin reference files used by the templates |
 
 ---
 
@@ -189,9 +193,8 @@ The Rmd template performs the following steps in order:
 14. Doublet detection with `scDblFinder` (annotated, not removed)
 15. Save filtered + annotated Seurat object to RDS
 
+## Notes
 
-
-To-do:
-1. start a git repo
-2. add integration step
-3. use local pathas for the TF and hemoglobin gene files. These will eventually be pulled when the git repo is cloned into wherever the working directory for the project is. 
+- The repository is version-controlled at https://github.com/mgildea87/scRNAseq_QC.
+- The old `merge_RNAseq.Rmd` file has been removed and is not part of the current pipeline.
+- TF and hemoglobin support files live under `support_files/` and are resolved relative to the R Markdown templates so cloned copies remain portable.
