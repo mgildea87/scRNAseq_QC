@@ -1,0 +1,4 @@
+sample_name,cellranger_dir,batch,min_nCount_RNA,max_nCount_RNA,min_nFeature_RNA,max_nFeature_RNA,max_percent_mt,min_malat1
+Control_1,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-1,A,NA,NA,NA,NA,NA,1
+Control_2,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-2,B,NA,NA,NA,NA,NA,1
+Treatment_1,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-3,A,500,25000,250,6000,20,1

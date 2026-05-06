@@ -1,0 +1,473 @@
+---
+title: "Merge and analyze"
+author: "Michael Gildea"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    keep_md: false
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    number_sections: true
+    df_print: kable
+    code_folding: hide
+---
+
+<style type="text/css">
+  body{
+  font-size: 12pt;
+}
+  h1{
+  font-size: 40pt;
+}
+  h2{
+  font-size: 30pt;
+}
+  h3,h4,h5,h6{
+  font-size: 20pt;
+}
+</style>
+
+Pickup from QC_normalization.Rmd
+
+Print the knit timestamp and R version for run provenance.
+```{r}
+time <- Sys.time()
+print(paste('This notebook was knit on:', time))
+print(version)
+```
+
+Display the current working directory used during report execution.
+```{r}
+cat(paste('Bigpurple Location: ',getwd()))
+```
+
+List conda-installed packages to capture environment details.
+```{r}
+system('conda list')
+```
+
+Load all required libraries used by downstream analysis chunks.
+```{r, message=F, warning=F}
+library(Seurat)
+library(ggplot2)
+library(CVRCFunc)
+library(pheatmap)
+library(lisi)
+library(grid)
+```
+
+Initialize chunk-level progress logging so the run records which code block starts executing.
+```{r, include=FALSE}
+chunk_log_dir <- 'chunk_logs'
+dir.create(chunk_log_dir, showWarnings = FALSE, recursive = TRUE)
+progress_log <- file.path(normalizePath(chunk_log_dir, mustWork = FALSE), 'chunk_progress_merged.log')
+cat(sprintf('\n=== merge_analysis run started: %s ===\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S')),
+    file = progress_log, append = TRUE)
+
+knitr::opts_hooks$set(label = function(options) {
+  chunk_label <- if (is.null(options$label) || !nzchar(options$label)) {
+    'unnamed-chunk'
+  } else {
+    options$label
+  }
+
+  line <- sprintf('[%s] START chunk: %s\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), chunk_label)
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  options
+})
+
+knitr::knit_hooks$set(chunk = function(x, options) {
+  chunk_label <- if (is.null(options$label) || !nzchar(options$label)) {
+    'unnamed-chunk'
+  } else {
+    options$label
+  }
+
+  line <- sprintf('[%s] END chunk: %s\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), chunk_label)
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  x
+})
+
+knitr::knit_hooks$set(document = function(x) {
+  line <- sprintf('[%s] END render: merge_analysis\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S'))
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  x
+})
+
+qc_support_dir <- '/gpfs/data/cvrcbioinfolab/gildem01/analysis_Rmd_templates_and_scripts/scRNAseq/Seurat_V5/QC'
+
+find_qc_support_file <- function(candidates) {
+  candidate_paths <- file.path(qc_support_dir, candidates)
+  candidate_paths[file.exists(candidate_paths)][1]
+}
+```
+
+# load merged object
+Load the merged Seurat object, harmonize metadata, detect species, and build RNA/SCT reductions if missing.
+```{r, warning=F, message=F}
+merged_path <- 'merged_QC.rds'
+if (!file.exists(merged_path)) {
+  stop('Could not find merged object: merged_QC.rds')
+}
+
+seurat <- readRDS(merged_path)
+message('Loaded merged object: ', merged_path)
+
+DefaultAssay(seurat) <- 'RNA'
+seurat <- JoinLayers(seurat, assay = 'RNA')
+
+# Detect species from feature naming conventions so TF annotation can choose
+# the correct reference table.
+all_features <- rownames(seurat)
+human_score <- sum(startsWith(all_features, 'MT-')) +
+  sum(all_features %in% c('MALAT1', 'HBA1', 'HBA2', 'HBB'))
+mouse_score <- sum(startsWith(all_features, 'mt-')) +
+  sum(all_features %in% c('Malat1', 'Hba-a1', 'Hba-a2', 'Hbb-bs', 'Hbb-bt'))
+species <- if (human_score >= mouse_score) 'human' else 'mouse'
+message('Autodetected species: ', species)
+
+# Harmonize metadata fields expected by this report.
+meta_cols <- colnames(seurat@meta.data)
+if (!'batch' %in% meta_cols) {
+  if ('sample_name' %in% meta_cols) {
+    seurat$batch <- seurat$sample_name
+  } else if ('orig.ident' %in% meta_cols) {
+    seurat$batch <- seurat$orig.ident
+  } else {
+    seurat$batch <- rep('batch_1', ncol(seurat))
+  }
+}
+if (!'condition' %in% colnames(seurat@meta.data)) {
+  seurat$condition <- seurat$batch
+}
+if (!'sample_name' %in% colnames(seurat@meta.data)) {
+  if ('orig.ident' %in% colnames(seurat@meta.data)) {
+    seurat$sample_name <- seurat$orig.ident
+  } else {
+    seurat$sample_name <- seurat$batch
+  }
+}
+
+# Build merged reductions/clusters if they are not already present.
+need_reduction <- !'PCA_RNA_merged' %in% names(seurat@reductions) ||
+  !'UMAP_RNA_merged' %in% names(seurat@reductions)
+need_clusters <- !'seurat_clusters_merged' %in% colnames(seurat@meta.data)
+need_sct_reduction <- !'PCA_SCT_merged' %in% names(seurat@reductions) ||
+  !'UMAP_SCT_merged' %in% names(seurat@reductions)
+need_sct_clusters <- !'seurat_clusters_sct_merged' %in% colnames(seurat@meta.data)
+
+options(future.globals.maxSize = 8000 * 1024^6) 
+if (need_reduction || need_clusters) {
+  message('Computing merged normalization/reductions/clusters...')
+  set.seed(1234)
+  seurat <- NormalizeData(seurat, assay = 'RNA')
+  seurat <- FindVariableFeatures(seurat, assay = 'RNA', nfeatures = 3000)
+  seurat <- ScaleData(seurat, assay = 'RNA')
+  seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_merged')
+  seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_RNA_merged', assay = 'RNA', reduction.name = 'UMAP_RNA_merged')
+  seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_merged', dims = c(1:30))
+  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'seurat_clusters_merged')
+}
+
+if (need_sct_reduction || need_sct_clusters) {
+  message('Computing merged SCTransform reductions/clusters...')
+  set.seed(1234)
+  seurat <- SCTransform(seurat, assay = 'RNA', new.assay.name = 'SCT', verbose = FALSE)
+  seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_merged')
+  seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_SCT_merged', assay = 'SCT', reduction.name = 'UMAP_SCT_merged')
+  seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_merged', dims = c(1:30))
+  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'seurat_clusters_sct_merged')
+}
+
+saveRDS(seurat, file = 'merged_QC.rds')
+```
+
+# Dim reduction plots
+Visualize log-normalization and SCT embeddings colored and split by batch and sample name.
+```{r, fig.height=7, fig.width=10, message=FALSE, warning=F}
+for (id_col in c('batch', 'sample_name')) {
+  if (id_col %in% colnames(seurat@meta.data)) {
+    Idents(seurat) <- id_col
+    print(DimPlot(seurat, reduction = 'PCA_RNA_merged', raster = F) + ggtitle(paste('RNA PCA by', id_col)))
+    print(DimPlot(seurat, reduction = 'UMAP_RNA_merged', raster = F) + ggtitle(paste('RNA UMAP by', id_col)))
+    print(DimPlot(seurat, reduction = 'UMAP_RNA_merged', raster = F, split.by = id_col, ncol = 3) + ggtitle(paste('RNA UMAP split by', id_col)))
+
+    print(DimPlot(seurat, reduction = 'PCA_SCT_merged', raster = F) + ggtitle(paste('SCT PCA by', id_col)))
+    print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', raster = F) + ggtitle(paste('SCT UMAP by', id_col)))
+    print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', raster = F, split.by = id_col, ncol = 3) + ggtitle(paste('SCT UMAP split by', id_col)))
+  }
+}
+print(DimPlot(seurat, reduction = 'UMAP_RNA_merged', group.by = 'seurat_clusters_merged', label = TRUE, raster = F) + ggtitle('log-norm UMAP colored by log-norm clustering'))
+print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', group.by = 'seurat_clusters_sct_merged', label = TRUE, raster = F) + ggtitle('SCT UMAP colored by SCT clustering'))
+```
+
+# Abundance
+
+Plot per-sample and per-batch cluster abundance distributions for RNA and SCT cluster assignments.
+```{r, fig.height=6, fig.width=16, message=F, warning=FALSE}
+plot_abundance <- function(cluster_col, method_label) {
+  prop_sample <- as.data.frame(prop.table(table(seurat$sample_name, seurat[[cluster_col]][, 1]), margin = 1))
+  sample_batch <- unique(seurat@meta.data[, c('sample_name', 'batch')])
+  prop_sample$sample_name <- prop_sample$Var1
+  prop_sample_batch <- merge(prop_sample, sample_batch, by = 'sample_name', all.x = TRUE, sort = FALSE)
+
+  list(
+    sample_plot = ggplot(prop_sample, aes(y = Freq, x = Var2, color = Var1)) +
+      geom_boxplot() +
+      geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1)) +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1)) +
+      ylab('Frequency') +
+      ggtitle(paste(method_label, 'abundance by sample_name')) +
+      labs(color = 'sample_name'),
+    batch_plot = ggplot(prop_sample_batch, aes(y = Freq, x = Var2, color = batch, fill = batch)) +
+      geom_boxplot(aes(group = interaction(Var2, batch)), alpha = 0.15, outlier.shape = NA,
+                   position = position_dodge(width = .8)) +
+      geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1), size = 1.8) +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1)) +
+      ylab('Frequency') +
+      ggtitle(paste(method_label, 'abundance by batch')) +
+      labs(color = 'batch', fill = 'batch')
+  )
+}
+
+rna_abundance_plots <- plot_abundance('seurat_clusters_merged', 'log-norm')
+print(rna_abundance_plots$sample_plot)
+print(rna_abundance_plots$batch_plot)
+
+sct_abundance_plots <- plot_abundance('seurat_clusters_sct_merged', 'SCT')
+print(sct_abundance_plots$sample_plot)
+print(sct_abundance_plots$batch_plot)
+```
+
+# LISI
+Compute LISI (Local Inverse Simpson's Index) scores from RNA and SCT PCA spaces and save them for reuse.
+LISI quantifies local neighborhood diversity for metadata labels (here: batch and sample_name) around each cell.
+Higher LISI means stronger local mixing across label groups (typically less batch/sample separation), while lower LISI means neighborhoods are dominated by fewer labels (stronger separation).
+In practice, consistently low batch-LISI with clear batch-segregated embeddings suggests technical batch effects and supports trying integration, while moderate/high batch-LISI with biologically coherent clustering suggests integration may be unnecessary.
+```{r, warning=F, message=F}
+pca_rna <- seurat@reductions$PCA_RNA_merged@cell.embeddings
+pca_sct <- seurat@reductions$PCA_SCT_merged@cell.embeddings
+lisi <- list(
+  RNA = compute_lisi(pca_rna[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name')),
+  SCT = compute_lisi(pca_sct[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name'))
+)
+saveRDS(lisi, file = 'lisi.rds')
+```
+
+Load or recompute LISI, then visualize distributions and embedding-level patterns for both methods.
+Histograms show the global spread of mixing scores; FeaturePlot overlays reveal where mixing is high or low in UMAP space; violin plots summarize per-cell score distributions for each label type.
+Use these plots to compare RNA vs SCT normalization in terms of local batch/sample mixing behavior.
+```{r, fig.height=5, fig.width=7, warning=F, message=F}
+if (file.exists('lisi.rds')) {
+  lisi <- readRDS('lisi.rds')
+} else {
+  pca_rna <- seurat@reductions$PCA_RNA_merged@cell.embeddings
+  pca_sct <- seurat@reductions$PCA_SCT_merged@cell.embeddings
+  lisi <- list(
+    RNA = compute_lisi(pca_rna[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name')),
+    SCT = compute_lisi(pca_sct[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name'))
+  )
+  saveRDS(lisi, file = 'lisi.rds')
+}
+
+for (method in c('RNA', 'SCT')) {
+  lisi_df <- lisi[[method]]
+  reduction_name <- if (method == 'RNA') 'UMAP_RNA_merged' else 'UMAP_SCT_merged'
+  for (lisi_col in c('batch', 'sample_name')) {
+    if (lisi_col %in% colnames(lisi_df)) {
+      feature_name <- paste0('lisi_', tolower(method), '_', lisi_col)
+      seurat[[feature_name]] <- lisi_df[[lisi_col]]
+      hist(lisi_df[[lisi_col]], breaks = 200, main = paste(method, 'LISI -', lisi_col))
+      print(FeaturePlot(seurat, features = feature_name, reduction = reduction_name, raster = F))
+      print(VlnPlot(seurat, features = feature_name, pt.size = 0) + NoLegend())
+    }
+  }
+}
+```
+
+# QC metrics
+Compare key QC metrics across log-normalization and SCT-based cluster identities.
+
+## log-norm clusters
+```{r, fig.height=6, fig.width=12, warning=F, message=F}
+VlnPlot(seurat, features = c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score'),
+        group.by = 'seurat_clusters_merged', pt.size = 0) +
+  ggtitle('QC metrics by log-norm clusters') + NoLegend()
+```
+
+## SCT clusters
+```{r, fig.height=6, fig.width=12, warning=F, message=F}
+VlnPlot(seurat, features = c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score'),
+        group.by = 'seurat_clusters_sct_merged', pt.size = 0) +
+  ggtitle('QC metrics by SCT clusters') + NoLegend()
+```
+
+
+# Differential expression (cluster markers)
+Run pseudobulk-style cluster marker discovery for log-norm and SCT cluster labels.
+```{r, warning=F, message=F}
+FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_log_norm')
+FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_sct_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
+```
+
+## Top marker heatmap log-norm
+Build heatmaps of top markers from log-norm and SCT marker result tables.
+```{r, fig.height=30, fig.width=5, warning=F, message=F}
+plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
+  if (!file.exists(marker_csv)) {
+    message('Skipping marker heatmap: ', marker_csv, ' not found.')
+    return(invisible(NULL))
+  }
+
+  paletteLength <- 50
+  myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+  myBreaks <- c(seq(-3, 0, length.out=ceiling(paletteLength/2) + 1), 
+                seq(3/paletteLength, 3, length.out=floor(paletteLength/2)))
+  markers <- read.csv(marker_csv)
+  markers <- markers$x
+  avg_exp <- AverageExpression(seurat, assays = assay_name, features = markers, group.by = group_col)
+  avg_exp <- avg_exp[[assay_name]]
+  mat <- t(scale(t(avg_exp)))
+  pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T, main = plot_title)
+  invisible(mat)
+}
+
+mat_rna <- plot_marker_heatmap('FindMarkersBulk_merged_log_norm/Top_markers.csv', 'seurat_clusters_merged', 'RNA', 'Top marker heatmap - log-norm')
+mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'seurat_clusters_sct_merged', 'SCT', 'Top marker heatmap - SCT')
+```
+
+Annotate marker heatmaps by labeling transcription factor genes when reference files are available.
+```{r, fig.height=10, fig.width=5, warning=F, message=F}
+add_tf_labels <- function(mat, label_text) {
+  if (is.null(mat)) {
+    message('Skipping TF-labeled heatmap: marker matrix not available for ', label_text)
+    return(invisible(NULL))
+  }
+
+  tf_candidates <- if (species == 'human') {
+    c('allTFs_hg38.txt', 'allTFs_mm.txt')
+  } else {
+    c('allTFs_mm.txt', 'allTFs_hg38.txt')
+  }
+  tf_path <- find_qc_support_file(tf_candidates)
+
+  genes <- row.names(mat)
+  if (!is.na(tf_path)) {
+    TFs <- read.table(tf_path, header = F, sep = '\t')
+    genes[which(!row.names(mat) %in% TFs$V1)] <- ''
+  } else {
+    genes[] <- ''
+  }
+
+  paletteLength <- 50
+  myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+  myBreaks <- c(seq(-2, 0, length.out=ceiling(paletteLength/2) + 1), 
+                seq(max(mat)/paletteLength, 2, length.out=floor(paletteLength/2)))
+
+  add.flag <- function(pheatmap,
+                       kept.labels,
+                       repel.degree) {
+
+  # repel.degree = number within [0, 1], which controls how much 
+  #                space to allocate for repelling labels.
+  ## repel.degree = 0: spread out labels over existing range of kept labels
+  ## repel.degree = 1: spread out labels over the full y-axis
+
+  heatmap <- pheatmap$gtable
+
+  new.label <- heatmap$grobs[[which(heatmap$layout$name == "row_names")]] 
+
+  kept.labels <- unique(kept.labels[nzchar(kept.labels)])
+  if (!length(kept.labels)) {
+    grid.newpage()
+    grid.draw(heatmap)
+    return(invisible(heatmap))
+  }
+
+  # keep only labels in kept.labels, replace the rest with ""
+  new.label$label <- ifelse(new.label$label %in% kept.labels, 
+                            new.label$label, "")
+
+  if (!any(new.label$label != "")) {
+    grid.newpage()
+    grid.draw(heatmap)
+    return(invisible(heatmap))
+  }
+
+  # calculate evenly spaced out y-axis positions
+  repelled.y <- function(d, d.select, k = repel.degree){
+    # d = vector of distances for labels
+    # d.select = vector of T/F for which labels are significant
+
+    # recursive function to get current label positions
+    # (note the unit is "npc" for all components of each distance)
+    strip.npc <- function(dd){
+      if(!"unit.arithmetic" %in% class(dd)) {
+        return(as.numeric(dd))
+      }
+
+      d1 <- strip.npc(dd$arg1)
+      d2 <- strip.npc(dd$arg2)
+      fn <- dd$fname
+      return(lazyeval::lazy_eval(paste(d1, fn, d2)))
+    }
+
+    full.range <- sapply(seq_along(d), function(i) strip.npc(d[i]))
+    selected.range <- sapply(seq_along(d[d.select]), function(i) strip.npc(d[d.select][i]))
+
+    return(unit(seq(from = max(selected.range) + k*(max(full.range) - max(selected.range)),
+                    to = min(selected.range) - k*(min(selected.range) - min(full.range)), 
+                    length.out = sum(d.select)), 
+                "npc"))
+  }
+  new.y.positions <- repelled.y(new.label$y,
+                                d.select = new.label$label != "")
+  new.flag <- segmentsGrob(x0 = new.label$x,
+                           x1 = new.label$x + unit(0.15, "npc"),
+                           y0 = new.label$y[new.label$label != ""],
+                           y1 = new.y.positions)
+
+  # shift position for selected labels
+  new.label$x <- new.label$x + unit(0.2, "npc")
+  new.label$y[new.label$label != ""] <- new.y.positions
+
+  # add flag to heatmap
+  heatmap <- gtable::gtable_add_grob(x = heatmap,
+                                   grobs = new.flag,
+                                   t = 4, 
+                                   l = 4
+  )
+
+  # replace label positions in heatmap
+  heatmap$grobs[[which(heatmap$layout$name == "row_names")]] <- new.label
+
+  # plot result
+  grid.newpage()
+  grid.draw(heatmap)
+
+  # return a copy of the heatmap invisibly
+  invisible(heatmap)
+}
+
+  heat <- pheatmap(
+    mat,
+    cluster_rows = T,
+    cluster_cols = T,
+    color = myColor,
+    breaks = myBreaks,
+    main = paste('Top 15 overexpressed genes per cluster\nScaled average expression\nTranscription factors labeled -', label_text),
+    silent = T,
+    fontsize = 8
+  )
+  add.flag(heat, kept.labels = genes, repel.degree = 0.5)
+}
+
+add_tf_labels(mat_rna, 'log-norm')
+add_tf_labels(mat_sct, 'SCT')
+```

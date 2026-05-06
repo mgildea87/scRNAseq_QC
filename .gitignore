@@ -1,0 +1,8 @@
+chunk_logs/
+logs/
+*_QC.html
+*_QC.rds
+merged_QC.rds
+merge_analysis.html
+.Rhistory
+.RData

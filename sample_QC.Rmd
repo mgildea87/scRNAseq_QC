@@ -1,0 +1,976 @@
+---
+title: "`r paste(params$sample_name, 'QC')`"
+author: "Michael Gildea"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    keep_md: false
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    number_sections: true
+    df_print: kable
+    code_folding: hide
+params:
+  sample_name:      "Sample"
+  batch:            "A"
+  filtered_path:    "filtered_feature_bc_matrix"
+  raw_path:         "raw_feature_bc_matrix"
+  output_dir:       "."
+  # Per-metric hard thresholds. Leave as NA to use the MAD-based defaults.
+  min_nCount_RNA:   NA
+  max_nCount_RNA:   NA
+  min_nFeature_RNA: NA
+  max_nFeature_RNA: NA
+  max_percent_mt:   NA
+  min_malat1:       0
+---
+
+<style type="text/css">
+  body { font-size: 12pt; }
+  h1   { font-size: 30pt; }
+  h2   { font-size: 20pt; }
+  h3, h4, h5, h6 { font-size: 15pt; }
+</style>
+
+```{r setup, include=FALSE}
+# Set global chunk defaults: suppress messages and warnings throughout
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+qc_support_dir <- '/gpfs/data/cvrcbioinfolab/gildem01/analysis_Rmd_templates_and_scripts/scRNAseq/Seurat_V5/QC'
+
+find_qc_support_file <- function(filename) {
+  file.path(qc_support_dir, filename)
+}
+```
+
+Track run progress by logging each code block as it starts, with timestamps.
+```{r chunk-progress-logging, include=FALSE}
+safe_sample_name <- gsub('[^A-Za-z0-9._-]+', '_', params$sample_name)
+chunk_log_dir <- file.path(params$output_dir, 'chunk_logs')
+dir.create(chunk_log_dir, showWarnings = FALSE, recursive = TRUE)
+progress_log <- file.path(chunk_log_dir, paste0('chunk_progress_', safe_sample_name, '.log'))
+cat(sprintf('\n=== sample_QC run started for %s: %s ===\n',
+            params$sample_name,
+            format(Sys.time(), '%Y-%m-%d %H:%M:%S')),
+    file = progress_log,
+    append = TRUE)
+
+knitr::opts_hooks$set(label = function(options) {
+  chunk_label <- if (is.null(options$label) || !nzchar(options$label)) {
+    'unnamed-chunk'
+  } else {
+    options$label
+  }
+
+  line <- sprintf('[%s] START chunk: %s\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), chunk_label)
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  options
+})
+
+knitr::knit_hooks$set(document = function(x) {
+  line <- sprintf('[%s] END render: %s\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), params$sample_name)
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  x
+})
+```
+
+```{r session-info}
+# Record knit time and R version for reproducibility
+time <- Sys.time()
+print(paste('This notebook was knit on:', time))
+print(version)
+```
+
+```{r working-directory}
+# Confirm working directory on the cluster
+cat(paste('Working directory:', getwd()))
+```
+
+```{r load-libraries}
+# ── Visualisation ──────────────────────────────────────────────────────────────
+library(ggplot2)
+library(patchwork)   # combine ggplot2 panels with +
+library(viridis)
+
+# ── Data manipulation ──────────────────────────────────────────────────────────
+library(dplyr)
+library(Hmisc)
+library(knitr)
+
+# ── Single-cell analysis ───────────────────────────────────────────────────────
+library(Seurat)
+library(scDblFinder)
+library(presto)
+
+
+```
+
+
+# Read in data and plot QC metrics
+Loads the CellRanger-filtered matrix for QC analysis and the unfiltered (raw) matrix for barcode rank plotting. Species (human/mouse) is auto-detected from gene symbol conventions and used to configure all downstream metric patterns.
+
+```{r load-data}
+# Load the CellRanger-filtered and unfiltered (raw) count matrices.
+# Paths are supplied via params (filtered_path / raw_path) so this Rmd can be
+# rendered programmatically across many samples without editing the file.
+seurat     <- Read10X(params$filtered_path)
+raw_matrix <- Read10X(params$raw_path)
+
+# Detect species from feature naming conventions so QC metrics adapt to
+# human/mouse gene symbol casing and marker patterns.
+all_features <- rownames(seurat)
+human_score <- sum(startsWith(all_features, 'MT-')) +
+  sum(all_features %in% c('MALAT1', 'HBA1', 'HBA2', 'HBB'))
+mouse_score <- sum(startsWith(all_features, 'mt-')) +
+  sum(all_features %in% c('Malat1', 'Hba-a1', 'Hba-a2', 'Hbb-bs', 'Hbb-bt'))
+
+species <- if (human_score >= mouse_score) 'human' else 'mouse'
+mt_pattern <- if (species == 'human') '^MT-' else '^mt-'
+
+malat1_candidates <- if (species == 'human') c('MALAT1', 'Malat1') else c('Malat1', 'MALAT1')
+malat1_feature <- malat1_candidates[malat1_candidates %in% all_features][1]
+
+# Load species-specific hemoglobin gene lists from CSVs located alongside the template.
+# Each CSV has one gene symbol per line, no header.
+hb_csv         <- find_qc_support_file(
+                    if (species == 'human') 'human_hemoglobin_genes.csv'
+                    else                    'mouse_hemoglobin_genes.csv')
+hb_gene_list   <- readLines(hb_csv)
+hb_gene_list   <- trimws(hb_gene_list[nzchar(hb_gene_list)])
+rbc_features   <- intersect(hb_gene_list, all_features)
+
+cat('Autodetected species:', species, '\n')
+cat('Mitochondrial gene pattern:', mt_pattern, '\n')
+if (!is.na(malat1_feature)) {
+  cat('MALAT1 feature used:', malat1_feature, '\n')
+} else {
+  cat('MALAT1 feature not found; MALAT1 filter will be skipped.\n')
+}
+cat('RBC genes detected:', length(rbc_features), '\n')
+```
+
+# Barcode rank plots
+Horizontal red line marks the UMI threshold determined by CellRanger that separates putative cells from empty droplets.
+
+```{r barcode-rank-plot}
+# Rank all barcodes by descending UMI count and plot the knee curve;
+# the CellRanger cell/empty threshold is shown as a horizontal red line
+bc_rank_data          <- data.frame(UMI_counts = Matrix::colSums(raw_matrix))
+bc_rank_data          <- arrange(bc_rank_data, desc(UMI_counts))
+bc_rank_data$rank     <- seq_len(nrow(bc_rank_data))
+cellranger_threshold  <- log10(min(Matrix::colSums(seurat)))
+
+ggplot(bc_rank_data, aes(x = log10(rank), y = log10(UMI_counts))) +
+  geom_point(color = 'navy') +
+  ggtitle('Barcode rank plot – RNA') +
+  theme_classic() +
+  geom_hline(yintercept = cellranger_threshold, color = 'firebrick')
+```
+
+# Filter for features present in at least 0.1% of cells
+Removes genes detected in fewer than 0.1% of barcodes before Seurat object creation to reduce matrix sparsity and speed up downstream steps without meaningfully affecting QC.
+
+```{r filter-lowly-detected-genes}
+# Remove genes detected in fewer than 0.1% of barcodes to reduce matrix sparsity
+min_cells  <- 0.001 * ncol(seurat)
+cat('Keeping genes detected in at least', min_cells, 'cells\n')
+keep_genes <- Matrix::rowSums(seurat) >= min_cells
+seurat     <- seurat[keep_genes, ]
+```
+
+# Create Seurat object
+Wraps the sparse count matrix in a Seurat object and computes the three primary per-cell QC covariates: UMI count (`nCount_RNA`), genes detected (`nFeature_RNA`), and mitochondrial read fraction (`percent.mt`, pattern chosen by species).
+
+```{r create-seurat-object}
+# Convert the filtered sparse matrix to a Seurat object and compute per-cell QC metrics
+seurat               <- CreateSeuratObject(seurat, min.cells = 0, min.features = 0)
+seurat[["percent.mt"]] <- PercentageFeatureSet(seurat, pattern = mt_pattern)
+seurat$Sample        <- rep(params$sample_name, ncol(seurat))
+seurat$batch         <- rep(params$batch, ncol(seurat))
+```
+
+# Cell and gene count prior to filtering
+Prints the Seurat object summary to record the number of cells and features entering the QC filtering step.
+
+```{r pre-filter-object-summary}
+seurat
+```
+
+# Summary statistics
+Descriptive statistics for the three primary per-cell QC metrics. Review these distributions before choosing MAD-based filter multiples.
+
+## UMI count
+Per-cell UMI count distribution. Very low values indicate empty droplets; very high values may indicate multiplets.
+```{r summary-umi}
+print(describe(seurat$nCount_RNA))
+```
+
+## Genes detected
+Number of unique genes detected per cell. Complements UMI count for identifying outlier cells at both extremes.
+```{r summary-genes}
+print(describe(seurat$nFeature_RNA))
+```
+
+## Fraction mitochondrial alignments
+Proportion of reads mapping to mitochondrial genes. Elevated values indicate stressed, lysed, or low-quality cells.
+```{r summary-mito}
+print(describe(seurat$percent.mt))
+```
+
+# Median absolute deviation (MAD)-based filtering
+Use the tables below to choose appropriate cutoff multiples before applying the filter.
+Thresholds are the metric value corresponding to ±1–5 MADs from the sample median.
+
+## Compute MAD thresholds
+Calculates per-metric medians and MADs, then tabulates the metric value at ±1–5 MAD multiples together with the fraction and count of cells that fall on each side. Use these tables to select appropriate filter multiples.
+
+```{r compute-mad-thresholds}
+# ── Per-metric medians and MADs ───────────────────────────────────────────────
+nCount_RNA_med   <- median(seurat$nCount_RNA)
+nCount_RNA_mad   <- median(abs(seurat$nCount_RNA   - nCount_RNA_med))
+
+nFeature_RNA_med <- median(seurat$nFeature_RNA)
+nFeature_RNA_mad <- median(abs(seurat$nFeature_RNA - nFeature_RNA_med))
+
+percent.mt_med   <- median(seurat$percent.mt)
+percent.mt_mad   <- median(abs(seurat$percent.mt   - percent.mt_med))
+
+cat('nCount_RNA   median =', nCount_RNA_med,   '| MAD =', nCount_RNA_mad,   '\n')
+cat('nFeature_RNA median =', nFeature_RNA_med, '| MAD =', nFeature_RNA_mad, '\n')
+cat('percent.mt   median =', percent.mt_med,   '| MAD =', percent.mt_mad,   '\n')
+
+# ── Helper: build threshold table for ±5 MADs ─────────────────────────────────
+# Returns one row per MAD multiple with the corresponding threshold value and
+# the fraction / count of cells that fall below or above it.
+build_mad_table <- function(values, med, mad) {
+  mad_lvl          <- 5:-5
+  my_ecdf          <- ecdf(values)
+  filter_threshold <- med + mad_lvl * mad
+  percentiles      <- my_ecdf(filter_threshold)
+  data.frame(
+    mad              = mad_lvl,
+    filter_threshold = filter_threshold,
+    percent_below    = percentiles,
+    cells_below      = percentiles * length(values),
+    percent_above    = 1 - percentiles,
+    cells_above      = (1 - percentiles) * length(values)
+  )
+}
+
+nCount_mad_thresh   <- build_mad_table(seurat$nCount_RNA,   nCount_RNA_med,   nCount_RNA_mad)
+nFeature_mad_thresh <- build_mad_table(seurat$nFeature_RNA, nFeature_RNA_med, nFeature_RNA_mad)
+percent.mt_mad_thresh <- build_mad_table(seurat$percent.mt, percent.mt_med,   percent.mt_mad)
+```
+
+## UMI count filter table
+Each row shows the UMI threshold at a given MAD multiple with the fraction and count of cells that fall below (would be removed as low-quality) or above it.
+```{r mad-table-umi}
+kable(nCount_mad_thresh, digits = 3,
+      caption = 'MAD-based filtering thresholds – UMI count',
+      align = c('l', 'c', 'c', 'c', 'c', 'c'))
+```
+
+## Genes detected filter table
+Each row shows the gene-count threshold at a given MAD multiple with the fraction and count of cells falling below or above it.
+```{r mad-table-genes}
+kable(nFeature_mad_thresh, digits = 3,
+      caption = 'MAD-based filtering thresholds – genes detected',
+      align = c('l', 'c', 'c', 'c', 'c', 'c'))
+```
+
+## Mitochondrial alignment fraction filter table
+Each row shows the mitochondrial fraction threshold at a given MAD multiple with the fraction and count of cells falling below or above it.
+```{r mad-table-mito}
+kable(percent.mt_mad_thresh, digits = 3,
+      caption = 'MAD-based filtering thresholds – mitochondrial fraction',
+      align = c('l', 'c', 'c', 'c', 'c', 'c'))
+```
+
+# QC plots (pre-filter)
+Solid red line = median; dashed red lines = ±1–5 MADs from the median.
+
+```{r helper-violin-refs, include=FALSE}
+# Helper: build a data frame of reference-line y-positions for violin plots.
+# Returns one row per MAD multiple with the y value and linetype
+# ("solid" for the median, "dashed" for all other multiples).
+# Set log_transform = TRUE for log10-scale metrics (nCount, nFeature).
+make_violin_refs <- function(med, mad, log_transform = TRUE) {
+  mads      <- -5:5
+  vals      <- med + mads * mad
+  linetypes <- ifelse(mads == 0, 'solid', 'dashed')
+  if (log_transform) {
+    keep      <- vals > 0
+    vals      <- log10(vals[keep])
+    linetypes <- linetypes[keep]
+  }
+  data.frame(y = vals, linetype = linetypes, stringsAsFactors = FALSE)
+}
+
+umi_refs  <- make_violin_refs(nCount_RNA_med,   nCount_RNA_mad,   log_transform = TRUE)
+gene_refs <- make_violin_refs(nFeature_RNA_med, nFeature_RNA_mad, log_transform = TRUE)
+mt_refs   <- make_violin_refs(percent.mt_med,   percent.mt_mad,   log_transform = FALSE)
+```
+
+```{r qc-violins-prefilter, fig.height=5, fig.width=12}
+# Violin plots for UMI count, gene count, and mitochondrial fraction.
+# geom_segment with inherit.aes=FALSE and explicit yend draws correct horizontal tick marks.
+cols <- viridis(3)
+
+umi_vio <- ggplot(seurat@meta.data,
+                  aes(y = log10(nCount_RNA), x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[1]) + theme(legend.position = 'none') +
+  geom_segment(data = umi_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = 'log10(UMI count)')
+
+gene_vio <- ggplot(seurat@meta.data,
+                   aes(y = log10(nFeature_RNA), x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[2]) + theme(legend.position = 'none') +
+  geom_segment(data = gene_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = 'log10(genes detected)')
+
+mt_vio <- ggplot(seurat@meta.data,
+                 aes(y = percent.mt, x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[3]) + theme(legend.position = 'none') +
+  geom_segment(data = mt_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = '% mitochondrial')
+
+umi_vio + gene_vio + mt_vio
+```
+
+```{r qc-histograms-prefilter, fig.height=4, fig.width=16}
+# Histograms of QC metric distributions; positive MAD thresholds shown as dashed lines
+umi_hist <- ggplot(seurat@meta.data, aes(x = log10(nCount_RNA), fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[1]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nCount_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nCount_mad_thresh$filter_threshold[nCount_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.5)
+
+gene_hist <- ggplot(seurat@meta.data, aes(x = log10(nFeature_RNA), fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[2]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nFeature_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.5)
+
+mt_hist <- ggplot(seurat@meta.data, aes(x = percent.mt, fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[3]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = percent.mt_med, color = 'red') +
+  geom_vline(xintercept = percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$filter_threshold > 0],
+             color = 'red', linetype = 'dashed', linewidth = 0.5)
+
+umi_hist + gene_hist + mt_hist
+```
+
+```{r qc-scatter-prefilter, fig.height=4, fig.width=16}
+# Scatter plots of metric pairs to detect co-varying outliers (e.g., high UMI + high MT)
+count_gene <- ggplot(seurat@meta.data,
+                     aes(x = log10(nCount_RNA), y = log10(nFeature_RNA), color = orig.ident)) +
+  geom_point() + theme_classic() +
+  scale_color_manual(values = cols[1]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nCount_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nCount_mad_thresh$filter_threshold[nCount_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25) +
+  geom_hline(yintercept = log10(nFeature_RNA_med), color = 'red') +
+  geom_hline(yintercept = log10(nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25)
+
+count_mito <- ggplot(seurat@meta.data,
+                     aes(x = log10(nCount_RNA), y = percent.mt, color = orig.ident)) +
+  geom_point() + theme_classic() +
+  scale_color_manual(values = cols[2]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nCount_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nCount_mad_thresh$filter_threshold[nCount_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25) +
+  geom_hline(yintercept = percent.mt_med, color = 'red') +
+  geom_hline(yintercept = percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$filter_threshold > 0],
+             color = 'red', linetype = 'dashed', linewidth = 0.25)
+
+gene_mito <- ggplot(seurat@meta.data,
+                    aes(x = log10(nFeature_RNA), y = percent.mt, color = orig.ident)) +
+  geom_point() + theme_classic() +
+  scale_color_manual(values = cols[3]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nFeature_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25) +
+  geom_hline(yintercept = percent.mt_med, color = 'red') +
+  geom_hline(yintercept = percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$filter_threshold > 0],
+             color = 'red', linetype = 'dashed', linewidth = 0.25)
+
+count_gene + count_mito + gene_mito
+```
+
+# MALAT1
+MALAT1 is a highly-expressed nuclear lncRNA. After normalisation, cells with very low MALAT1 are likely lysed or damaged. The feature name (`MALAT1` / `Malat1`) is selected automatically based on the detected species.
+
+```{r malat1-scatter, fig.height=5, fig.width=7}
+# MALAT1 is a nuclear lncRNA; low normalised MALAT1 indicates poor-quality or
+# lysed cells. Normalise the data before plotting.
+seurat <- NormalizeData(seurat, assay = 'RNA')
+if (is.na(malat1_feature)) {
+  cat('Skipping MALAT1 scatter: MALAT1/ Malat1 not found in feature set.\n')
+} else {
+  scatter_df <- FetchData(seurat, vars = c('nCount_RNA', malat1_feature), layer = 'data')
+  colnames(scatter_df) <- c('nCount_RNA', 'MALAT1')
+  ggplot(scatter_df, aes(x = nCount_RNA, y = MALAT1, color = nCount_RNA)) +
+    geom_point(size = 0.5, alpha = 0.5) +
+    scale_color_viridis_c(name = 'nCount_RNA') +
+    theme_classic() +
+    labs(x = 'UMI count (nCount_RNA)', y = malat1_feature,
+         title = 'MALAT1 vs UMI count — colored by nCount_RNA')
+}
+```
+
+# Red blood cells (pre-filter)
+Haemoglobin gene expression is used as a proxy for residual red blood cell (RBC) contamination. The species-specific gene list from `human_hemoglobin_genes.csv` / `mouse_hemoglobin_genes.csv` is intersected with detected features.
+
+```{r rbc-prefilter, fig.width=4, fig.height=3}
+# Haemoglobin genes flag RBC contamination; species-specific feature set.
+if (length(rbc_features) > 0) {
+  seurat[["percent.rbc"]] <- PercentageFeatureSet(seurat, features = rbc_features)
+} else {
+  seurat[["percent.rbc"]] <- 0
+  cat('No RBC genes detected for species', species, '- setting percent.rbc to 0.\n')
+}
+
+ggplot(seurat@meta.data, aes(y = percent.rbc, x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[1]) + theme(legend.position = 'none')
+
+ggplot(seurat@meta.data, aes(x = percent.rbc, fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[3]) + theme(legend.position = 'none')
+```
+
+```{r summary-rbc}
+print(describe(seurat$percent.rbc))
+```
+
+# Filter
+Applies per-metric thresholds to remove low-quality cells. Uses hard thresholds from `params` if provided (non-`NA`); otherwise falls back to MAD-based defaults (−4 MADs for count/gene lower bounds, +5 MADs for mitochondrial upper bound). MALAT1 filtering is applied on the normalised `data` layer and skipped if the gene is absent.
+
+```{r apply-filter}
+# ── Resolve filter thresholds ──────────────────────────────────────────────────
+# For each metric, use the hard threshold from params if supplied (non-NA);
+# otherwise fall back to the MAD-based default (±4 MADs for counts/genes,
+# +5 MADs for mitochondrial fraction).
+resolve_thresh <- function(param_val, mad_val) {
+  if (!is.na(param_val)) param_val else mad_val
+}
+
+thresh_min_nCount   <- resolve_thresh(params$min_nCount_RNA,
+                         nCount_mad_thresh$filter_threshold[nCount_mad_thresh$mad == -4])
+thresh_max_nCount   <- resolve_thresh(params$max_nCount_RNA,   Inf)
+thresh_min_nFeature <- resolve_thresh(params$min_nFeature_RNA,
+                         nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$mad == -4])
+thresh_max_nFeature <- resolve_thresh(params$max_nFeature_RNA, Inf)
+thresh_max_mt       <- resolve_thresh(params$max_percent_mt,
+                         percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$mad == 5])
+thresh_min_malat1   <- resolve_thresh(params$min_malat1, 1)
+
+cat('Filter thresholds applied:\n')
+cat('  nCount_RNA   :', thresh_min_nCount,   '–', thresh_max_nCount,   '\n')
+cat('  nFeature_RNA :', thresh_min_nFeature, '–', thresh_max_nFeature, '\n')
+cat('  percent.mt   : <', thresh_max_mt,  '\n')
+cat('  MALAT1 (norm): >', thresh_min_malat1, '\n')
+
+# ── Apply filter ───────────────────────────────────────────────────────────────
+seurat <- subset(
+  seurat,
+  nCount_RNA   >  thresh_min_nCount   &
+  nCount_RNA   <  thresh_max_nCount   &
+  nFeature_RNA >  thresh_min_nFeature &
+  nFeature_RNA <  thresh_max_nFeature &
+  percent.mt   <  thresh_max_mt
+)
+if (!is.na(malat1_feature)) {
+  malat_vals <- Seurat::FetchData(seurat, vars = malat1_feature, layer = 'data')[, 1]
+  keep_cells <- names(malat_vals)[malat_vals > thresh_min_malat1]
+  seurat <- subset(seurat, cells = keep_cells)
+} else {
+  cat('Skipping MALAT1-based filtering: MALAT1/ Malat1 not found.\n')
+}
+```
+
+# Cell count post-filter
+Prints the Seurat object summary after all filters have been applied to confirm the retained cell and feature counts.
+
+```{r post-filter-object-summary}
+seurat
+```
+
+# QC plots (post-filter)
+Solid red line = pre-filter median; dashed red lines = pre-filter MAD thresholds (shown as reference).
+
+```{r qc-violins-postfilter, fig.height=5, fig.width=12}
+# Same reference data frames (umi_refs, gene_refs, mt_refs) as pre-filter for direct comparison
+umi_vio <- ggplot(seurat@meta.data,
+                  aes(y = log10(nCount_RNA), x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[1]) + theme(legend.position = 'none') +
+  geom_segment(data = umi_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = 'log10(UMI count)')
+
+gene_vio <- ggplot(seurat@meta.data,
+                   aes(y = log10(nFeature_RNA), x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[2]) + theme(legend.position = 'none') +
+  geom_segment(data = gene_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = 'log10(genes detected)')
+
+mt_vio <- ggplot(seurat@meta.data,
+                 aes(y = percent.mt, x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[3]) + theme(legend.position = 'none') +
+  geom_segment(data = mt_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = '% mitochondrial')
+
+umi_vio + gene_vio + mt_vio
+```
+
+```{r qc-histograms-postfilter, fig.height=4, fig.width=16}
+# Histograms after filtering — same MAD reference lines as pre-filter
+umi_hist <- ggplot(seurat@meta.data, aes(x = log10(nCount_RNA), fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[1]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nCount_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nCount_mad_thresh$filter_threshold[nCount_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.5)
+
+gene_hist <- ggplot(seurat@meta.data, aes(x = log10(nFeature_RNA), fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[2]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nFeature_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.5)
+
+mt_hist <- ggplot(seurat@meta.data, aes(x = percent.mt, fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[3]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = percent.mt_med, color = 'red') +
+  geom_vline(xintercept = percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$filter_threshold > 0],
+             color = 'red', linetype = 'dashed', linewidth = 0.5)
+
+umi_hist + gene_hist + mt_hist
+```
+
+```{r qc-scatter-postfilter, fig.height=4, fig.width=16}
+# Scatter plots after filtering
+count_gene <- ggplot(seurat@meta.data,
+                     aes(x = log10(nCount_RNA), y = log10(nFeature_RNA), color = orig.ident)) +
+  geom_point() + theme_classic() +
+  scale_color_manual(values = cols[1]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nCount_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nCount_mad_thresh$filter_threshold[nCount_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25) +
+  geom_hline(yintercept = log10(nFeature_RNA_med), color = 'red') +
+  geom_hline(yintercept = log10(nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25)
+
+count_mito <- ggplot(seurat@meta.data,
+                     aes(x = log10(nCount_RNA), y = percent.mt, color = orig.ident)) +
+  geom_point() + theme_classic() +
+  scale_color_manual(values = cols[2]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nCount_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nCount_mad_thresh$filter_threshold[nCount_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25) +
+  geom_hline(yintercept = percent.mt_med, color = 'red') +
+  geom_hline(yintercept = percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$filter_threshold > 0],
+             color = 'red', linetype = 'dashed', linewidth = 0.25)
+
+gene_mito <- ggplot(seurat@meta.data,
+                    aes(x = log10(nFeature_RNA), y = percent.mt, color = orig.ident)) +
+  geom_point() + theme_classic() +
+  scale_color_manual(values = cols[3]) + theme(legend.position = 'none') +
+  geom_vline(xintercept = log10(nFeature_RNA_med), color = 'red') +
+  geom_vline(xintercept = log10(nFeature_mad_thresh$filter_threshold[nFeature_mad_thresh$filter_threshold > 0]),
+             color = 'red', linetype = 'dashed', linewidth = 0.25) +
+  geom_hline(yintercept = percent.mt_med, color = 'red') +
+  geom_hline(yintercept = percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$filter_threshold > 0],
+             color = 'red', linetype = 'dashed', linewidth = 0.25)
+
+count_gene + count_mito + gene_mito
+```
+
+# Dimensionality reduction & clustering
+Runs the standard Seurat RNA workflow on the filtered object: highly variable feature selection → scaling → PCA → SNN graph → Leiden clustering → UMAP embedding. The elbow plot is printed to help assess how many PCs to retain.
+
+```{r dim-reduction-clustering}
+# Standard Seurat preprocessing: variable features → scale → PCA → graph → cluster → UMAP.
+# NormalizeData was already called in the MALAT1 section above; not repeated here.
+seurat <- FindVariableFeatures(seurat, assay = 'RNA')
+seurat <- ScaleData(seurat, assay = 'RNA')
+seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'pca_rna')
+ElbowPlot(seurat, reduction = 'pca_rna')
+seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'pca_rna', dims = 1:30)
+seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'seurat_clusters_rna')
+seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'pca_rna', reduction.name = 'umap_rna')
+```
+
+# Most variable genes (log1p)
+Mean–variance plot of log-normalised expression with the top 30 most variable genes labelled. Assess whether variable features represent biology or technical noise.
+
+```{r variable-features-plot, fig.height=8, fig.width=10}
+# Label the top 30 most variable genes on the mean-variance plot
+top30 <- head(VariableFeatures(seurat), 30)
+plot1 <- VariableFeaturePlot(seurat)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+plot2
+```
+
+# Mean–variance relationship
+In scRNA-seq count data, variance typically scales with the mean (higher-expressed genes are more variable). Three plots are shown:
+
+1. **Log mean vs log variance**: Points falling above the diagonal red line (slope = 1, the Poisson expectation) are overdispersed — they vary more than expected by chance alone. Overdispersed genes carry the most biological signal and drive variable feature selection.
+2. **Detection rate vs log mean**: The red curve shows the Poisson-predicted detection rate at each mean expression level. Genes that fall below the curve are detected less often than expected, which can indicate bursty or bimodal expression. Genes above the curve are more consistently detected.
+3. **UMI count vs genes detected per cell**: Cells should follow a roughly linear relationship between total UMI count and number of genes detected. Outliers — cells with many UMIs but few genes, or many genes but few UMIs — may represent doublets, empty droplets, or poor-quality cells that survived earlier filters.
+
+These plots motivate the use of SCTransform downstream, which directly models and removes the mean–variance trend to prevent highly expressed housekeeping genes from dominating dimensionality reduction.
+
+```{r mean-variance, fig.height=4, fig.width=8}
+# Compute per-gene and per-cell summary statistics from the raw count matrix
+gene_attr <- data.frame(
+  mean           = rowMeans(seurat@assays$RNA$counts),
+  detection_rate = rowMeans(seurat@assays$RNA$counts > 0),
+  var            = apply(seurat@assays$RNA$counts, 1, var)
+)
+gene_attr$log_mean <- log10(gene_attr$mean)
+gene_attr$log_var  <- log10(gene_attr$var)
+rownames(gene_attr) <- rownames(seurat)
+
+cell_attr <- data.frame(
+  n_umi  = colSums(seurat@assays$RNA$counts),
+  n_gene = colSums(seurat@assays$RNA$counts > 0)
+)
+rownames(cell_attr) <- colnames(seurat@assays$RNA)
+
+# Mean-variance: points above the diagonal (red line) show overdispersion beyond Poisson
+ggplot(gene_attr, aes(log_mean, log_var)) +
+  geom_point(alpha = 0.3, shape = 16) +
+  geom_density_2d(linewidth = 0.3) +
+  geom_abline(intercept = 0, slope = 1, color = 'red')
+
+# Detection rate vs mean: deviation from the Poisson prediction (red) suggests overdispersion
+x <- seq(from = -3, to = 2, length.out = 1000)
+poisson_model <- data.frame(
+  log_mean       = x,
+  detection_rate = 1 - dpois(0, lambda = 10^x)
+)
+ggplot(gene_attr, aes(log_mean, detection_rate)) +
+  geom_point(alpha = 0.3, shape = 16) +
+  geom_line(data = poisson_model, color = 'red') +
+  theme_gray(base_size = 8)
+
+# UMI vs gene count per cell
+ggplot(cell_attr, aes(n_umi, n_gene)) +
+  geom_point(alpha = 0.3, shape = 16) +
+  geom_density_2d(linewidth = 0.3)
+```
+
+## SCTransform per-gene and regularised model coefficients
+
+```{r sctransform-model, fig.height=4, fig.width=16}
+# Fit SCTransform model to evaluate variance-stabilisation quality.
+# future.globals.maxSize set to 8 GB to accommodate large count matrices.
+set.seed(44)
+options(future.globals.maxSize = 8000 * 1024^6) 
+vst_out <- sctransform::vst(
+  seurat@assays$RNA$counts,
+  latent_var       = c('log_umi'),
+  return_gene_attr = TRUE,
+  return_cell_attr = TRUE,
+  verbosity        = 1
+)
+sctransform::plot_model_pars(vst_out, show_theta = TRUE) + theme_bw()
+```
+
+# SCTransform normalization workflow
+
+```{r sctransform-normalize}
+# Normalize with SCTransform and rerun dimensionality reduction
+# on the SCT assay. 
+seurat <- SCTransform(seurat, assay = 'RNA', new.assay.name = 'SCT', verbose = FALSE)
+
+seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'pca_sct')
+seurat <- FindNeighbors(seurat, reduction = 'pca_sct', dims = 1:30)
+seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'seurat_clusters_sct')
+seurat <- RunUMAP(seurat, reduction = 'pca_sct', dims = 1:30, reduction.name = 'umap_sct')
+
+# Keep a default cluster column for compatibility with downstream tooling.
+seurat$seurat_clusters <- seurat$seurat_clusters_sct
+Idents(seurat) <- 'seurat_clusters_sct'
+```
+
+# UMAP plots by normalisation method
+Two-dimensional UMAP embeddings for RNA (log-normalised) and SCTransform workflows.
+
+```{r umap-plot}
+DimPlot(seurat, reduction = 'umap_rna', group.by = 'seurat_clusters_rna', label = TRUE, repel = TRUE) +
+  ggtitle('UMAP (RNA normalisation)')
+
+DimPlot(seurat, reduction = 'umap_sct', group.by = 'seurat_clusters_sct', label = TRUE, repel = TRUE) +
+  ggtitle('UMAP (SCTransform normalisation)')
+```
+
+# QC metrics across clusters by normalisation method
+Projects log-scale UMI count and gene count onto each UMAP and visualises QC metric distributions by method-specific cluster labels.
+
+```{r qc-by-cluster}
+# Log-scale QC metrics projected onto RNA and SCT UMAPs and split by
+# method-specific cluster identities.
+seurat$nCount_RNA_log   <- log10(seurat$nCount_RNA)
+seurat$nFeature_RNA_log <- log10(seurat$nFeature_RNA)
+
+FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'umap_rna') +
+  ggtitle('RNA UMAP: log10 nCount_RNA')
+FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'umap_rna') +
+  ggtitle('RNA UMAP: log10 nFeature_RNA')
+VlnPlot(seurat,
+        features = c('nCount_RNA_log', 'nFeature_RNA_log', 'percent.mt'),
+        group.by = 'seurat_clusters_rna', stack = TRUE, flip = TRUE)
+
+FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'umap_sct') +
+  ggtitle('SCT UMAP: log10 nCount_RNA')
+FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'umap_sct') +
+  ggtitle('SCT UMAP: log10 nFeature_RNA')
+VlnPlot(seurat,
+        features = c('nCount_RNA_log', 'nFeature_RNA_log', 'percent.mt'),
+        group.by = 'seurat_clusters_sct', stack = TRUE, flip = TRUE)
+```
+
+# Red blood cells (post-clustering)
+Checks whether any clusters are enriched for haemoglobin gene expression after filtering. Clusters with high `percent.rbc` likely represent residual RBC contamination and may warrant removal.
+
+```{r rbc-postfilter}
+# Check whether any remaining clusters are enriched for RBC contamination
+FeaturePlot(seurat, features = 'percent.rbc')
+ggplot(seurat@meta.data, aes(y = percent.rbc, x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = cols[1]) + theme(legend.position = 'none')
+ggplot(seurat@meta.data, aes(x = percent.rbc, fill = orig.ident)) +
+  geom_histogram() + theme_classic() +
+  scale_fill_manual(values = cols[3]) + theme(legend.position = 'none')
+```
+
+# Cell cycle scoring
+Scores each cell for S-phase and G2/M-phase activity using Seurat's built-in marker gene lists (`cc.genes.updated.2019`). For mouse data, human symbols are converted to title-case. Scores and phase assignment are stored in cell metadata as `S.Score`, `G2M.Score`, and `Phase`.
+
+```{r cell-cycle-scoring}
+# Score each cell for S and G2M phase activity using Seurat's built-in gene lists.
+# Built-in cc.genes / cc.genes.updated.2019 are human symbols; for mouse, convert
+# to title case (e.g. TOP2A → Top2a) which matches Ensembl mouse gene symbols.
+cc <- cc.genes.updated.2019
+
+if (species == 'human') {
+  s_genes   <- cc$s.genes
+  g2m_genes <- cc$g2m.genes
+} else {
+  s_genes   <- tools::toTitleCase(tolower(cc$s.genes))
+  g2m_genes <- tools::toTitleCase(tolower(cc$g2m.genes))
+}
+
+# Restrict to genes actually present in the assay to avoid warnings
+s_genes   <- intersect(s_genes,   rownames(seurat))
+g2m_genes <- intersect(g2m_genes, rownames(seurat))
+
+cat('S-phase genes found:  ', length(s_genes),   '\n')
+cat('G2M-phase genes found:', length(g2m_genes), '\n')
+
+seurat <- CellCycleScoring(
+  seurat,
+  s.features   = s_genes,
+  g2m.features = g2m_genes,
+  assay        = 'RNA'
+)
+```
+
+```{r cell-cycle-umap, fig.height=7, fig.width=10}
+# UMAP coloured by phase and by continuous S / G2M scores
+phase_plot <- DimPlot(seurat, group.by = 'Phase', label = FALSE) +
+  ggtitle('Cell cycle phase')
+
+s_plot   <- FeaturePlot(seurat, features = 'S.Score',   order = TRUE) +
+  scale_colour_viridis_c()
+g2m_plot <- FeaturePlot(seurat, features = 'G2M.Score', order = TRUE) +
+  scale_colour_viridis_c()
+
+phase_plot
+s_plot
+g2m_plot
+```
+
+```{r cell-cycle-violin, fig.height=7, fig.width=12}
+# S and G2M scores per cluster; high scores in a cluster suggest cycling cells
+s_vln <- VlnPlot(seurat, features = 'S.Score',   group.by = 'seurat_clusters',
+                 assay = 'RNA', pt.size = 0) + NoLegend() + xlab('Cluster')
+g2m_vln <- VlnPlot(seurat, features = 'G2M.Score', group.by = 'seurat_clusters_sct',
+                   assay = 'RNA', pt.size = 0) + NoLegend() + xlab('Cluster')
+s_vln
+g2m_vln
+```
+
+```{r cell-cycle-phase-table}
+# Counts and proportions of each phase per cluster for both methods
+phase_prop_rna <- as.data.frame(
+  prop.table(table(Cluster = seurat$seurat_clusters_rna, Phase = seurat$Phase), margin = 1)
+)
+phase_prop_sct <- as.data.frame(
+  prop.table(table(Cluster = seurat$seurat_clusters_sct, Phase = seurat$Phase), margin = 1)
+)
+
+ggplot(phase_prop_rna, aes(x = Cluster, y = Freq, fill = Phase)) +
+  geom_bar(stat = 'identity') +
+  theme_classic() +
+  ylab('Fraction') +
+  ggtitle('Cell cycle phase composition per cluster (RNA normalisation)')
+
+ggplot(phase_prop_sct, aes(x = Cluster, y = Freq, fill = Phase)) +
+  geom_bar(stat = 'identity') +
+  theme_classic() +
+  ylab('Fraction') +
+  ggtitle('Cell cycle phase composition per cluster (SCTransform normalisation)')
+```
+
+# Top marker heatmap
+Identifies per-cluster marker genes using the Wilcoxon rank-sum test (presto). The top 20 markers per cluster (log-FC > 0.25, adjusted p < 0.05) are displayed as a row-scaled heatmap of average normalised expression.
+
+```{r marker-heatmap, fig.height=18, fig.width=8}
+# Identify per-cluster markers with Wilcoxon test (presto), then display the
+# average normalised expression of the top 20 markers per cluster for RNA/SCT.
+build_top_marker_heatmap <- function(
+  obj,
+  cluster_col,
+  assay_name,
+  layer_name,
+  title_text
+) {
+  markers <- wilcoxauc(
+    obj,
+    only.pos = TRUE,
+    assay = layer_name,
+    seurat_assay = assay_name,
+    group_by = cluster_col
+  )
+
+  top20 <- markers %>%
+    group_by(group) %>%
+    dplyr::filter(logFC > 0.25 & padj < 0.05) %>%
+    slice_head(n = 20) %>%
+    ungroup()
+
+  if (nrow(top20) == 0) {
+    message('No marker genes passed filters for: ', title_text)
+    return(invisible(NULL))
+  }
+
+  avg_exp <- AverageExpression(
+    obj,
+    features = unique(top20$feature),
+    assay = assay_name,
+    layer = layer_name,
+    group.by = cluster_col
+  )
+
+  mat <- avg_exp[[assay_name]]
+  if (nrow(mat) == 0 || ncol(mat) == 0) {
+    message('Empty average expression matrix for: ', title_text)
+    return(invisible(NULL))
+  }
+
+  pheatmap::pheatmap(
+    mat,
+    scale = 'row',
+    color = myColor,
+    breaks = myBreaks,
+    fontsize = 6,
+    main = title_text
+  )
+}
+
+paletteLength <- 50
+myColor  <- colorRampPalette(c('blue', 'white', 'red'))(paletteLength)
+myBreaks <- c(
+  seq(-3, 0,              length.out = ceiling(paletteLength / 2) + 1),
+  seq(3 / paletteLength, 3, length.out = floor(paletteLength / 2))
+)
+
+build_top_marker_heatmap(
+  seurat,
+  cluster_col = 'seurat_clusters_rna',
+  assay_name = 'RNA',
+  layer_name = 'data',
+  title_text = 'Top marker heatmap (RNA normalisation)'
+)
+
+build_top_marker_heatmap(
+  seurat,
+  cluster_col = 'seurat_clusters_sct',
+  assay_name = 'SCT',
+  layer_name = 'data',
+  title_text = 'Top marker heatmap (SCTransform normalisation)'
+)
+```
+
+# Doublet detection
+Doublets are annotated but **not removed** here; reassess after integration/merging.
+
+```{r doublet-detection}
+# Run scDblFinder, annotate cells, save the final Seurat object, then visualise.
+# Doublets are flagged but NOT removed here; reassess after integration/merging.
+seurat_sce <- as.SingleCellExperiment(seurat)
+seurat_sce <- scDblFinder(seurat_sce, clusters = seurat_sce$ident)
+seurat$doublet_class <- seurat_sce$scDblFinder.class
+seurat$doublet_score <- seurat_sce$scDblFinder.score
+
+rds_path <- file.path(params$output_dir, paste0(params$sample_name, '_QC.rds'))
+saveRDS(seurat, file = rds_path)
+cat('Saved:', rds_path, '\n')
+```
+
+```{r doublet-plots}
+# Doublet distribution across clusters
+print(table(seurat$seurat_clusters_sct, seurat$doublet_class))
+
+Idents(seurat) <- 'doublet_class'
+DimPlot(seurat) + scale_color_manual(values = c('grey', 'red'))
+FeaturePlot(seurat, features = 'doublet_score')
+
+Idents(seurat) <- 'seurat_clusters_sct'
+VlnPlot(seurat, features = 'doublet_score') + NoLegend()
+
+# Proportion of doublets per cluster
+prop.doublets <- as.data.frame(
+  prop.table(table(seurat$seurat_clusters_sct, seurat$doublet_class), margin = 1)
+)
+ggplot(prop.doublets, aes(x = Var1, y = Freq, fill = Var2)) +
+  geom_bar(stat = 'identity') +
+  theme_classic() +
+  xlab('Cluster number') +
+  ylab('Fraction doublet class')
+```
+
