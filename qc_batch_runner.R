@@ -1,11 +1,11 @@
 #!/usr/bin/env Rscript
 # ─────────────────────────────────────────────────────────────────────────────
-# run_QC_batch.R
+# qc_batch_runner.R
 #
 # Render sample_QC.Rmd for every sample listed in a sample sheet.
 #
 # USAGE (interactive or on a compute node):
-#   Rscript run_QC_batch.R --sample_sheet samples.csv --output_dir results/QC
+#   Rscript qc_batch_runner.R --sample_sheet samples.csv --output_dir results/QC
 #
 # SAMPLE SHEET FORMAT (CSV, with header):
 #   sample_name,cellranger_dir,batch
@@ -30,6 +30,15 @@
 #   --ncores        Number of samples to render in parallel (default: 1)
 #   --merge_only    If TRUE, skip rendering and only merge existing
 #                   <sample_name>_QC.rds files (default: FALSE)
+#   --skip_merge    If TRUE, skip automatic merge after successful
+#                   multi-sample rendering (default: FALSE)
+#   --run_integration If TRUE, render integrate_RNA.Rmd after a successful
+#                   merge (default: FALSE)
+#   --integration_template Path to integrate_RNA.Rmd template
+#                   (default: same directory as this script)
+#   --integration_only If TRUE, run only integration on an existing
+#                   merged_QC.rds (default: FALSE)
+#   --integration_level Required when integration runs: Batch or Sample
 # ─────────────────────────────────────────────────────────────────────────────
 
 suppressPackageStartupMessages({
@@ -41,7 +50,7 @@ suppressPackageStartupMessages({
 print_usage_and_exit <- function(status = 0L) {
   cat(
     "Usage:\n",
-    "  Rscript run_QC_batch.R --sample_sheet <file.csv> [options]\n\n",
+    "  Rscript qc_batch_runner.R --sample_sheet <file.csv> [options]\n\n",
     "Options:\n",
     "  --sample_sheet <path>   Path to CSV sample sheet [required]\n",
     "  --output_dir <path>     Directory for HTML reports and RDS files [default: QC]\n",
@@ -50,7 +59,12 @@ print_usage_and_exit <- function(status = 0L) {
     "  --outs_subdir <name>    Subdirectory inside cellranger_dir [default: outs]\n",
     "  --ncores <int>          Number of samples to render in parallel [default: 1]\n",
     "  --sample_name <name>    Process only one sample_name from sheet\n",
-    "  --merge_only <TRUE/FALSE>  Skip rendering and merge existing RDS files [default: FALSE]\n",
+    "  --merge_only <TRUE/FALSE>  If TRUE, skip individual sample QC and only merge existing RDS files and render merged report. Requires presence of the individual <sample_name>_QC.rds files present in the sample_sheet. [default: FALSE]\n",
+    "  --skip_merge <TRUE/FALSE> Skip automatic merge after successful multi-sample render [default: FALSE]\n",
+    "  --run_integration <TRUE/FALSE> Run integration and render integration report after successful merge [default: FALSE]\n",
+    "  --integration_template <path> Path to integrate_RNA.Rmd [default: same dir as script]\n",
+    "  --integration_only <TRUE/FALSE> Run only integration from existing merged_QC.rds [default: FALSE]\n",
+    "  --integration_level <Batch|Sample> Required when integration runs\n",
     "  --help                  Show this help message\n",
     sep = ""
   )
@@ -63,10 +77,15 @@ parse_cli_args <- function(args) {
     output_dir = "QC",
     template = NULL,
     merge_template = NULL,
+    integration_template = NULL,
+    integration_level = NULL,
     outs_subdir = "outs",
     ncores = 1L,
     sample_name = NULL,
-    merge_only = "FALSE"
+    merge_only = "FALSE",
+    skip_merge = "FALSE",
+    run_integration = "FALSE",
+    integration_only = "FALSE"
   )
 
   if (length(args) == 0L) return(defaults)
@@ -108,6 +127,27 @@ parse_cli_args <- function(args) {
     stop(flag_name, " must be TRUE or FALSE.", call. = FALSE)
   }
   defaults$merge_only <- parse_logical_flag(defaults$merge_only, "--merge_only")
+  defaults$skip_merge <- parse_logical_flag(defaults$skip_merge, "--skip_merge")
+  defaults$run_integration <- parse_logical_flag(defaults$run_integration, "--run_integration")
+  defaults$integration_only <- parse_logical_flag(defaults$integration_only, "--integration_only")
+
+  if (isTRUE(defaults$integration_only)) {
+    defaults$run_integration <- TRUE
+  }
+
+  normalize_integration_level <- function(x) {
+    x_chr <- trimws(as.character(x))
+    if (!nzchar(x_chr)) return(NA_character_)
+    x_low <- tolower(x_chr)
+    if (x_low == "batch") return("Batch")
+    if (x_low == "sample") return("Sample")
+    NA_character_
+  }
+  defaults$integration_level <- normalize_integration_level(defaults$integration_level)
+
+  if (isTRUE(defaults$run_integration) && is.na(defaults$integration_level)) {
+    stop("--integration_level is required when integration runs; use Batch or Sample.", call. = FALSE)
+  }
 
   defaults
 }
@@ -141,6 +181,26 @@ if (!isTRUE(opt$merge_only)) {
 
 if (is.null(opt$merge_template)) {
   opt$merge_template <- file.path(script_dir, "merge_analysis.Rmd")
+}
+
+if (is.null(opt$integration_template)) {
+  opt$integration_template <- file.path(script_dir, "integrate_RNA.Rmd")
+}
+
+if (isTRUE(opt$run_integration) && !file.exists(opt$integration_template)) {
+  stop("Integration template not found: ", opt$integration_template, call. = FALSE)
+}
+
+if (isTRUE(opt$run_integration) && isTRUE(opt$skip_merge) && !isTRUE(opt$integration_only)) {
+  stop("--run_integration TRUE requires merge to run; do not combine with --skip_merge TRUE.", call. = FALSE)
+}
+
+if (isTRUE(opt$integration_only) && isTRUE(opt$merge_only)) {
+  stop("--integration_only cannot be combined with --merge_only.", call. = FALSE)
+}
+
+if (isTRUE(opt$integration_only) && !is.null(opt$sample_name)) {
+  stop("--integration_only cannot be combined with --sample_name.", call. = FALSE)
 }
 
 # ── Read and validate sample sheet ────────────────────────────────────────────
@@ -244,10 +304,63 @@ render_merge_rmd <- function(output_dir, merge_template) {
   invisible(ok)
 }
 
+render_integration_rmd <- function(output_dir, integration_template) {
+  if (!file.exists(integration_template)) {
+    warning("Integration template not found; skipping integration report render: ", integration_template, call. = FALSE)
+    return(invisible(FALSE))
+  }
+
+  merged_qc_rds <- file.path(output_dir, "merged_QC.rds")
+  if (!file.exists(merged_qc_rds)) {
+    warning("Merged object not found; skipping integration report render: ", merged_qc_rds, call. = FALSE)
+    return(invisible(FALSE))
+  }
+
+  message("Rendering integration report from template: ", integration_template)
+  out_html <- file.path(output_dir, "integrate_RNA.html")
+
+  ok <- tryCatch({
+    rmarkdown::render(
+      input          = integration_template,
+      output_file    = out_html,
+      params         = list(
+        merged_rds_path    = merged_qc_rds,
+        integrated_rds_path = file.path(output_dir, "integrated.rds"),
+        output_dir         = output_dir,
+        integration_level  = opt$integration_level
+      ),
+      knit_root_dir  = output_dir,
+      envir          = new.env(parent = globalenv()),
+      quiet          = TRUE
+    )
+    TRUE
+  }, error = function(e) {
+    warning("integrate_RNA.Rmd render failed: ", conditionMessage(e), call. = FALSE)
+    FALSE
+  })
+
+  if (isTRUE(ok)) {
+    message("Integration report rendered: ", out_html)
+  }
+  invisible(ok)
+}
+
+# ── integration_only mode: render integration report from existing merged_QC.rds
+if (isTRUE(opt$integration_only)) {
+  dir.create(opt$output_dir, showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(opt$output_dir, "chunk_logs"), showWarnings = FALSE, recursive = TRUE)
+  message(strrep("-", 60))
+  render_integration_rmd(opt$output_dir, opt$integration_template)
+  quit(status = 0)
+}
+
 # ── merge_only mode: do not resolve matrices or render; just merge existing RDS
 if (isTRUE(opt$merge_only)) {
   if (!is.null(opt$sample_name)) {
     stop("--merge_only cannot be combined with --sample_name.", call. = FALSE)
+  }
+  if (isTRUE(opt$skip_merge)) {
+    stop("--merge_only cannot be combined with --skip_merge TRUE.", call. = FALSE)
   }
   dir.create(opt$output_dir, showWarnings = FALSE, recursive = TRUE)
   dir.create(file.path(opt$output_dir, "chunk_logs"), showWarnings = FALSE, recursive = TRUE)
@@ -255,12 +368,19 @@ if (isTRUE(opt$merge_only)) {
   if (isTRUE(merge_ok) && nrow(samples) > 1L) {
     message(strrep("-", 60))
     render_merge_rmd(opt$output_dir, opt$merge_template)
+    if (isTRUE(opt$run_integration)) {
+      message(strrep("-", 60))
+      render_integration_rmd(opt$output_dir, opt$integration_template)
+    }
   }
   quit(status = 0)
 }
 
 # ── Filter to a single sample if --sample_name was supplied ───────────────────
 if (!is.null(opt$sample_name)) {
+  if (isTRUE(opt$run_integration)) {
+    stop("--run_integration TRUE cannot be combined with --sample_name because merge is not run.", call. = FALSE)
+  }
   samples <- samples[samples$sample_name == opt$sample_name, ]
   if (nrow(samples) == 0) {
     stop("--sample_name '", opt$sample_name, "' not found in sample sheet.", call. = FALSE)
@@ -501,10 +621,19 @@ if (nrow(failed) > 0) {
 # Only attempt merge when processing the full sample sheet (not a single-sample run)
 # and only when every sample succeeded.
 if (is.null(opt$sample_name) && nrow(samples) > 1L && nrow(failed) == 0L) {
-  message(strrep("-", 60))
-  merge_ok <- merge_sample_rds(samples, opt$output_dir)
-  if (isTRUE(merge_ok)) {
+  if (isTRUE(opt$skip_merge)) {
     message(strrep("-", 60))
-    render_merge_rmd(opt$output_dir, opt$merge_template)
+    message("Skipping merge and merge report because --skip_merge is TRUE.")
+  } else {
+    message(strrep("-", 60))
+    merge_ok <- merge_sample_rds(samples, opt$output_dir)
+    if (isTRUE(merge_ok)) {
+      message(strrep("-", 60))
+      render_merge_rmd(opt$output_dir, opt$merge_template)
+      if (isTRUE(opt$run_integration)) {
+        message(strrep("-", 60))
+        render_integration_rmd(opt$output_dir, opt$integration_template)
+      }
+    }
   }
 }

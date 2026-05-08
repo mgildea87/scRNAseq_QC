@@ -15,8 +15,10 @@ GitHub repository: https://github.com/mgildea87/scRNAseq_QC
 |------|---------|
 | `sample_QC.Rmd` | Parameterised R Markdown template for per-sample QC |
 | `merge_analysis.Rmd` | R Markdown template for post-merge analysis across samples |
-| `run_QC_batch.R` | Launcher script — renders the template for every row in a sample sheet |
-| `run_QC_batch_with_r.sh` | Wrapper that sources the CVRC R conda environment and runs `run_QC_batch.R` |
+| `integrate_RNA.Rmd` | Optional post-merge RNA integration report template |
+| `qc_batch_runner.R` | Main batch runner — renders `sample_QC.Rmd` for each sample in the sample sheet |
+| `run_qc_batch_local.sh` | Local shell launcher — loads the CVRC R conda environment, then runs `qc_batch_runner.R` |
+| `submit_QC_batch.sh` | Cluster launcher — submits one SLURM job per sample (plus a dependent merge job) |
 | `samples.csv` | Sample sheet — edit this to point to your data |
 | `support_files/` | Bundled TF and haemoglobin reference files used by the templates |
 
@@ -86,21 +88,78 @@ they contain valid 10x MEX files (`matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and
 
 ## Running the pipeline
 
-### Multiple samples (direct shell, non-SLURM)
+### Choose a run mode
 
-Use the wrapper script when you want to run directly from a shell while
-ensuring the expected R environment is loaded first.
+- `run_qc_batch_local.sh`: many samples on one machine from a shell (no SLURM)
+- `sample_QC.Rmd` in RStudio/R console: one sample interactively
+- `submit_QC_batch.sh`: many samples on the cluster via SLURM (recommended at scale)
+
+### Many samples on one machine (terminal, no SLURM)
+
+Use this when running directly in a shell and you want environment setup handled
+for you automatically.
+
+By default, this mode is **sequential** (`--ncores 1`), so samples are
+processed one at a time. To parallelise per-sample QC on a single machine,
+set `--ncores` to a value greater than 1.
+
+When running the full sample sheet with more than one sample, merge is
+performed automatically after all samples complete successfully. To skip this,
+set `--skip_merge TRUE`.
+
+To run the optional post-merge integration report template (`integrate_RNA.Rmd`)
+after a successful merge, set `--run_integration TRUE` and provide
+`--integration_level Batch` or `--integration_level Sample`.
 
 ```bash
-bash /path/to/templates/QC/run_QC_batch_with_r.sh \
+bash /path/to/templates/QC/run_qc_batch_local.sh \
   --sample_sheet /abs/path/to/samples.csv \
   --output_dir   /abs/path/to/results/QC
 ```
 
-### Single sample (interactive / RStudio)
+```bash
+# Example: process samples in parallel on 8 cores
+bash /path/to/templates/QC/run_qc_batch_local.sh \
+  --sample_sheet /abs/path/to/samples.csv \
+  --output_dir   /abs/path/to/results/QC \
+  --ncores       8
+
+# Example: render all samples but skip merged_QC outputs
+bash /path/to/templates/QC/run_qc_batch_local.sh \
+  --sample_sheet /abs/path/to/samples.csv \
+  --output_dir   /abs/path/to/results/QC \
+  --skip_merge   TRUE
+
+# Example: run optional integration report after merge
+bash /path/to/templates/QC/run_qc_batch_local.sh \
+  --sample_sheet     /abs/path/to/samples.csv \
+  --output_dir       /abs/path/to/results/QC \
+  --run_integration  TRUE \
+  --integration_level Batch
+
+# Example: run only integration from an existing merged_QC.rds
+bash /path/to/templates/QC/run_qc_batch_local.sh \
+  --sample_sheet      /abs/path/to/samples.csv \
+  --output_dir        /abs/path/to/results/QC \
+  --integration_only  TRUE \
+  --integration_level Sample
+```
+
+### One sample manually (RStudio or R console)
 
 Open `sample_QC.Rmd` and knit with custom parameters, or run from
 the R console:
+
+When using `rmarkdown::render(..., params = list(...))`, parameter values are
+resolved as follows:
+
+- Any parameter supplied in `params = list(...)` **overrides** the value in the
+  YAML `params:` block of `sample_QC.Rmd`.
+- Any parameter not supplied in `params = list(...)` falls back to the default
+  value defined in the YAML `params:` block.
+
+In other words, console-supplied params take precedence, and YAML params act as
+defaults.
 
 ```r
 rmarkdown::render(
@@ -114,7 +173,7 @@ rmarkdown::render(
 )
 ```
 
-### Multiple samples — SLURM (`submit_QC_batch.sh`)
+### Many samples on the cluster (SLURM, `submit_QC_batch.sh`)
 
 The recommended way to run across many samples. The coordinator script reads
 your sample sheet and submits **one independent SLURM job per sample** on the
@@ -125,6 +184,15 @@ bash /path/to/templates/QC/submit_QC_batch.sh \
   --sample_sheet /abs/path/to/samples.csv \
   --output_dir   /abs/path/to/results/QC
 ```
+
+For sample sheets with more than one sample, this mode submits a dependent
+merge job by default. To skip that merge job, pass `--skip_merge TRUE`.
+
+To run the optional integration report after merge in the merge job, pass
+`--run_integration TRUE --integration_level Batch` (or `Sample`).
+
+To run only the integration stage on an existing merged object, pass
+`--integration_only TRUE --integration_level Batch` (or `Sample`).
 
 > Use **absolute paths** for `--sample_sheet` and `--output_dir` — each sample
 > runs as a separate job on a compute node where relative paths may not resolve.
@@ -140,6 +208,11 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 | `--outs_subdir` | `outs` | Subdirectory inside `cellranger_dir` used as the search base for filtered/raw matrix folders. Set to `""` if `cellranger_dir` already points to the base directory containing those folders |
 | `--mem` | `32` | Memory per job in GB |
 | `--merge_mem` | `64` | Memory for the merge job in GB |
+| `--integration_mem` | `64` | Memory for the integration job in GB |
+| `--skip_merge` | `FALSE` | Skip the post-sample merge step (`merged_QC.rds` and `merge_analysis.html`) |
+| `--run_integration` | `FALSE` | Run optional post-merge integration report (`integrate_RNA.Rmd`) |
+| `--integration_level` | *(required when integration runs)* | Integration grouping level: `Batch` or `Sample` |
+| `--integration_only` | `FALSE` | Skip sample QC and merge; run only `integrate_RNA.Rmd` using existing `merged_QC.rds` |
 | `--time` | `12:00:00` | Wall time per job — max on `cpu_short` is `12:00:00` |
 
 ```bash
@@ -148,7 +221,8 @@ bash /path/to/submit_QC_batch.sh \
   --sample_sheet /abs/path/to/samples.csv \
   --output_dir   /abs/path/to/results/QC \
   --mem          32 \
-  --merge_mem    96
+  --merge_mem    96 \
+  --integration_mem 128
 ```
 
 Monitor submitted jobs with `squeue -u $USER`.
@@ -170,6 +244,13 @@ When the sample sheet contains more than one sample, the merge step also writes:
 |------|-------------|
 | `<output_dir>/merged_QC.rds` | Merged Seurat object produced from all `<sample_name>_QC.rds` files |
 | `<output_dir>/merge_analysis.html` | Post-merge analysis report rendered from `merge_analysis.Rmd` |
+
+When `--run_integration TRUE` is used and merge succeeds, the integration step can also write:
+
+| File | Description |
+|------|-------------|
+| `<output_dir>/integrate_RNA.html` | Integration report rendered from `integrate_RNA.Rmd` |
+| `<output_dir>/integrated.rds` | Integrated Seurat object if produced by `integrate_RNA.Rmd` |
 
 ---
 

@@ -11,11 +11,16 @@
 #       --sample_sheet /abs/path/to/samples.csv \
 #       --output_dir   /abs/path/to/results/QC
 #
-# OPTIONAL FLAGS (forwarded to run_QC_batch.R):
+# OPTIONAL FLAGS (forwarded to qc_batch_runner.R):
 #   --outs_subdir <dir>   subdirectory inside cellranger_dir (default: outs)
 #   --mem         <GB>    memory per job in GB              (default: 32)
 #   --merge_mem   <GB>    memory for merge job in GB         (default: 64)
+#   --integration_mem <GB> memory for integration job in GB   (default: 64)
 #   --time        <HH:MM> wall time per job                 (default: 2:00:00)
+#   --skip_merge  <TRUE/FALSE> skip submitting merge job     (default: FALSE)
+#   --run_integration <TRUE/FALSE> render integrate_RNA.Rmd after merge (default: FALSE)
+#   --integration_level <Batch|Sample> required when integration runs
+#   --integration_only <TRUE/FALSE> run only integration from merged_QC.rds (default: FALSE)
 # =============================================================================
 
 set -euo pipefail
@@ -30,7 +35,12 @@ OUTPUT_DIR="QC"
 OUTS_SUBDIR="outs"
 MEM_GB=32
 MERGE_MEM_GB=64
+INTEGRATION_MEM_GB=64
 WALL_TIME="2:00:00"
+SKIP_MERGE="FALSE"
+RUN_INTEGRATION="FALSE"
+INTEGRATION_LEVEL=""
+INTEGRATION_ONLY="FALSE"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,10 +49,66 @@ while [[ $# -gt 0 ]]; do
     --outs_subdir)  OUTS_SUBDIR="$2";  shift 2 ;;
     --mem)          MEM_GB="$2";       shift 2 ;;
     --merge_mem)    MERGE_MEM_GB="$2"; shift 2 ;;
+    --integration_mem) INTEGRATION_MEM_GB="$2"; shift 2 ;;
     --time)         WALL_TIME="$2";    shift 2 ;;
+    --skip_merge)   SKIP_MERGE="$2";   shift 2 ;;
+    --run_integration) RUN_INTEGRATION="$2"; shift 2 ;;
+    --integration_level) INTEGRATION_LEVEL="$2"; shift 2 ;;
+    --integration_only) INTEGRATION_ONLY="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+SKIP_MERGE_LOWER="$(echo "${SKIP_MERGE}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${SKIP_MERGE_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
+  SKIP_MERGE="TRUE"
+elif [[ "${SKIP_MERGE_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
+  SKIP_MERGE="FALSE"
+else
+  echo "ERROR: --skip_merge must be TRUE or FALSE." >&2
+  exit 1
+fi
+
+RUN_INTEGRATION_LOWER="$(echo "${RUN_INTEGRATION}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${RUN_INTEGRATION_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
+  RUN_INTEGRATION="TRUE"
+elif [[ "${RUN_INTEGRATION_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
+  RUN_INTEGRATION="FALSE"
+else
+  echo "ERROR: --run_integration must be TRUE or FALSE." >&2
+  exit 1
+fi
+
+INTEGRATION_ONLY_LOWER="$(echo "${INTEGRATION_ONLY}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${INTEGRATION_ONLY_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
+  INTEGRATION_ONLY="TRUE"
+elif [[ "${INTEGRATION_ONLY_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
+  INTEGRATION_ONLY="FALSE"
+else
+  echo "ERROR: --integration_only must be TRUE or FALSE." >&2
+  exit 1
+fi
+
+if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
+  RUN_INTEGRATION="TRUE"
+fi
+
+INTEGRATION_LEVEL_LOWER="$(echo "${INTEGRATION_LEVEL}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
+  if [[ "${INTEGRATION_LEVEL_LOWER}" == "batch" ]]; then
+    INTEGRATION_LEVEL="Batch"
+  elif [[ "${INTEGRATION_LEVEL_LOWER}" == "sample" ]]; then
+    INTEGRATION_LEVEL="Sample"
+  else
+    echo "ERROR: --integration_level is required when integration runs and must be Batch or Sample." >&2
+    exit 1
+  fi
+fi
+
+if [[ "${SKIP_MERGE}" == "TRUE" && "${RUN_INTEGRATION}" == "TRUE" && "${INTEGRATION_ONLY}" != "TRUE" ]]; then
+  echo "ERROR: --run_integration TRUE requires merge; do not combine with --skip_merge TRUE." >&2
+  exit 1
+fi
 
 if [[ -z "${SAMPLE_SHEET}" ]]; then
   echo "ERROR: --sample_sheet is required." >&2
@@ -73,8 +139,41 @@ fi
 echo "Submitting ${#SAMPLES[@]} job(s)..."
 echo "  Sample sheet : ${SAMPLE_SHEET}"
 echo "  Output dir   : ${OUTPUT_DIR}"
-echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Time: ${WALL_TIME}"
+echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}"
 echo "----------------------------------------------"
+
+if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
+  INTEGRATE_JOB_ID=$(sbatch \
+    --job-name="QC_integrate" \
+    --partition=cpu_short \
+    --ntasks=1 \
+    --cpus-per-task=1 \
+    --mem="${INTEGRATION_MEM_GB}G" \
+    --time="${WALL_TIME}" \
+    --output="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
+    --error="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
+    --parsable \
+    --wrap="
+      set -euo pipefail
+      set +u
+      source \"${CONDA_INIT}\"
+      set -u
+      echo \"Job ID   : \${SLURM_JOB_ID}\"
+      echo \"Node     : \${SLURMD_NODENAME}\"
+      echo \"Task     : integration only\"
+      echo \"Start    : \$(date)\"
+      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
+        --sample_sheet \"${SAMPLE_SHEET}\" \
+        --output_dir   \"${OUTPUT_DIR}\" \
+        --integration_only TRUE \
+        --integration_level \"${INTEGRATION_LEVEL}\"
+      echo \"Finished : \$(date)\"
+    ")
+  echo "  Submitted: integration-only job  (job ${INTEGRATE_JOB_ID})"
+  echo "----------------------------------------------"
+  echo "All jobs submitted. Monitor with: squeue -u \$USER"
+  exit 0
+fi
 
 # ── Submit one job per sample ─────────────────────────────────────────────────
 SAMPLE_JOB_IDS=()
@@ -101,7 +200,7 @@ for SAMPLE in "${SAMPLES[@]}"; do
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Sample   : ${SAMPLE}\"
       echo \"Start    : \$(date)\"
-      Rscript \"${TEMPLATE_DIR}/run_QC_batch.R\" \
+      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
         --template     \"${TEMPLATE_DIR}/sample_QC.Rmd\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --sample_name  \"${SAMPLE}\" \
@@ -114,7 +213,7 @@ for SAMPLE in "${SAMPLES[@]}"; do
 done
 
 # ── Submit merge job (runs only if ALL sample jobs succeed) ───────────────────
-if [[ ${#SAMPLES[@]} -gt 1 ]]; then
+if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
   # Build colon-separated dependency string: afterok:id1:id2:...
   DEPENDENCY="afterok:$(IFS=:; echo "${SAMPLE_JOB_IDS[*]}")"
 
@@ -138,7 +237,7 @@ if [[ ${#SAMPLES[@]} -gt 1 ]]; then
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Task     : merge all samples\"
       echo \"Start    : \$(date)\"
-      Rscript \"${TEMPLATE_DIR}/run_QC_batch.R\" \
+      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
         --outs_subdir  \"${OUTS_SUBDIR}\" \
@@ -146,6 +245,39 @@ if [[ ${#SAMPLES[@]} -gt 1 ]]; then
       echo \"Finished : \$(date)\"
     ")
   echo "  Submitted: merge job  (job ${MERGE_JOB_ID}, depends on: ${SAMPLE_JOB_IDS[*]})"
+
+  if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
+    INTEGRATE_JOB_ID=$(sbatch \
+      --job-name="QC_integrate" \
+      --partition=cpu_short \
+      --ntasks=1 \
+      --cpus-per-task=1 \
+      --mem="${INTEGRATION_MEM_GB}G" \
+      --time="${WALL_TIME}" \
+      --dependency="afterok:${MERGE_JOB_ID}" \
+      --output="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
+      --error="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
+      --parsable \
+      --wrap="
+        set -euo pipefail
+        set +u
+        source \"${CONDA_INIT}\"
+        set -u
+        echo \"Job ID   : \${SLURM_JOB_ID}\"
+        echo \"Node     : \${SLURMD_NODENAME}\"
+        echo \"Task     : run integration\"
+        echo \"Start    : \$(date)\"
+        Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
+          --sample_sheet \"${SAMPLE_SHEET}\" \
+          --output_dir   \"${OUTPUT_DIR}\" \
+          --integration_only TRUE \
+          --integration_level \"${INTEGRATION_LEVEL}\"
+        echo \"Finished : \$(date)\"
+      ")
+    echo "  Submitted: integration job  (job ${INTEGRATE_JOB_ID}, depends on merge job ${MERGE_JOB_ID})"
+  fi
+elif [[ ${#SAMPLES[@]} -gt 1 ]]; then
+  echo "  Skipping merge job submission because --skip_merge is TRUE"
 fi
 
 echo "----------------------------------------------"

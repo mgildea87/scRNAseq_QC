@@ -28,8 +28,6 @@ output:
 }
 </style>
 
-Pickup from QC_normalization.Rmd
-
 Print the knit timestamp and R version for run provenance.
 ```{r}
 time <- Sys.time()

@@ -9,4 +9,4 @@ set +u
 source "${CONDA_INIT}"
 set -u
 
-exec Rscript "${SCRIPT_DIR}/run_QC_batch.R" "$@"
+exec Rscript "${SCRIPT_DIR}/qc_batch_runner.R" "$@"

@@ -1,0 +1,232 @@
+---
+title: "Integrate RNA"
+author: "Michael Gildea"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    keep_md: false
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    number_sections: true
+    df_print: kable
+    code_folding: hide
+params:
+  merged_rds_path: "merged_QC.rds"
+  integrated_rds_path: "integrated.rds"
+  output_dir: "."
+  integration_level: "Batch"
+  lisi_rds_path: "lisi_integrated_RNA.rds"
+  markers_csv_path: "FindMarkersBulk_RNA_integrated/Top_markers.csv"
+---
+
+<style type="text/css">
+  body{
+  font-size: 12pt;
+}
+  h1{
+  font-size: 40pt;
+}
+  h2{
+  font-size: 30pt;
+}
+  h3,h4,h5,h6{
+  font-size: 20pt;
+}
+</style>
+
+Report metadata: print knit timestamp and R version for reproducibility.
+```{r report-metadata}
+time <- Sys.time()
+print(paste('This notebook was knit on:', time))
+print(version)
+```
+
+Environment context: print working directory used during render.
+```{r working-directory}
+cat(paste('Bigpurple Location: ',getwd()))
+```
+
+Environment package snapshot: attempt to print conda package list for debugging.
+```{r conda-package-list}
+try(system('conda list'), silent = TRUE)
+```
+
+Load required R packages for integration, plotting, and diagnostics.
+```{r load-libraries, message=F, warning=F}
+library(Seurat)
+library(ggplot2)
+library(pheatmap)
+library(lisi)
+library(CVRCFunc)
+```
+
+Parameter validation: check integration level and resolve output paths.
+```{r validate-params-and-paths, warning=F, message=F}
+if (!params$integration_level %in% c('Batch', 'Sample')) {
+  stop("params$integration_level must be 'Batch' or 'Sample'.")
+}
+
+integration_group_column <- if (params$integration_level == 'Batch') 'batch' else 'sample_name'
+
+resolve_output_path <- function(path_val) {
+  if (grepl('^/', path_val)) return(path_val)
+  file.path(params$output_dir, path_val)
+}
+
+lisi_rds_path <- resolve_output_path(params$lisi_rds_path)
+markers_csv_path <- resolve_output_path(params$markers_csv_path)
+```
+
+Track run progress by logging each code chunk as it starts, with timestamps.
+```{r chunk-progress-logging, include=FALSE}
+safe_level <- gsub('[^A-Za-z0-9._-]+', '_', params$integration_level)
+chunk_log_dir <- file.path(params$output_dir, 'chunk_logs')
+dir.create(chunk_log_dir, showWarnings = FALSE, recursive = TRUE)
+progress_log <- file.path(chunk_log_dir, paste0('chunk_progress_integrate_RNA_', safe_level, '.log'))
+cat(sprintf('\n=== integrate_RNA run started (%s): %s ===\n',
+            params$integration_level,
+            format(Sys.time(), '%Y-%m-%d %H:%M:%S')),
+    file = progress_log,
+    append = TRUE)
+
+knitr::opts_hooks$set(label = function(options) {
+  chunk_label <- if (is.null(options$label) || !nzchar(options$label)) {
+    'unnamed-chunk'
+  } else {
+    options$label
+  }
+
+  line <- sprintf('[%s] START chunk: %s\n', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), chunk_label)
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  options
+})
+
+knitr::knit_hooks$set(document = function(x) {
+  line <- sprintf('[%s] END render: integrate_RNA (%s)\n',
+                  format(Sys.time(), '%Y-%m-%d %H:%M:%S'),
+                  params$integration_level)
+  cat(line, file = progress_log, append = TRUE)
+  message(sub('\n$', '', line))
+  x
+})
+```
+
+Input loading: read merged object and verify required integration metadata exists.
+```{r load-merged-object}
+if (!file.exists(params$merged_rds_path)) {
+  stop('Merged RDS not found: ', params$merged_rds_path)
+}
+seurat <- readRDS(params$merged_rds_path)
+
+if (!integration_group_column %in% colnames(seurat@meta.data)) {
+  stop('Missing integration metadata column: ', integration_group_column)
+}
+```
+
+Integration workflow: split by selected level, integrate RNA, cluster, and save output RDS.
+```{r integrate-rna}
+print(paste('Integrating RNA at level:', params$integration_level))
+options(future.globals.maxSize = 8000 * 1024^8)
+
+seurat[["RNA"]] <- split(
+  seurat[["RNA"]],
+  f = seurat@meta.data[[integration_group_column]]
+)
+seurat <- NormalizeData(seurat, assay = 'RNA')
+seurat <- FindVariableFeatures(seurat, assay = 'RNA')
+seurat <- ScaleData(seurat, assay = 'RNA')
+seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_split')
+seurat <- IntegrateLayers(object = seurat, method = RPCAIntegration, orig.reduction = "PCA_RNA_split", new.reduction = "integrated.rpca",verbose = FALSE, assay = 'RNA')
+seurat <- FindNeighbors(seurat, reduction = "integrated.rpca", dims = 1:30)
+seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = "RNA_integrated_clusters_0.75", algorithm = 4)
+seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'integrated.rpca', reduction.name = 'UMAP_RNA_integrated')
+saveRDS(seurat, file = params$integrated_rds_path)
+```
+
+# UMAP plots
+## Dim reduction plots
+Visual overview: plot integrated UMAP colored by sample_name, batch, and cluster identity.
+```{r integrated-umap-plots, fig.height=7, fig.width=10, message=FALSE, warning=F, eval = T}
+
+Idents(seurat) <- 'sample_name'
+DimPlot(seurat, reduction = 'UMAP_RNA_integrated', raster = F)
+
+Idents(seurat) <- 'batch'
+DimPlot(seurat, reduction = 'UMAP_RNA_integrated', raster = F)
+
+Idents(seurat) <- 'RNA_integrated_clusters_0.75'
+DimPlot(seurat, reduction = 'UMAP_RNA_integrated', raster = F)
+```
+
+## Abundance
+
+Cluster composition: compute and visualize per-sample and per-batch abundance distributions.
+```{r cluster-abundance-plots, fig.height=6, fig.width=16, message=F, warning=FALSE, eval = T}
+prop_table <- as.data.frame(prop.table(table(seurat$sample_name, seurat$RNA_integrated_clusters_0.75), margin = 1))
+sample_batch_map <- unique(seurat@meta.data[, c('sample_name', 'batch')])
+sample_batch_map$sample_name <- as.character(sample_batch_map$sample_name)
+prop_table$batch <- sample_batch_map$batch[match(as.character(prop_table$Var1), sample_batch_map$sample_name)]
+ggplot(prop_table, aes(y = Freq, x = Var2, color = Var1))+geom_point()+theme_classic()
+ggplot(prop_table, aes(y = Freq, x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('Frequency')
+ggplot(prop_table, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('log10(Frequency)')
+```
+
+## LISI
+LISI computation: calculate batch mixing scores from integrated embeddings and save to disk.
+```{r compute-lisi, eval = T}
+pca <- seurat@reductions$integrated.rpca@cell.embeddings
+lisi <- compute_lisi(pca[,c(1:30)], seurat@meta.data, label_colnames = c('batch'))
+saveRDS(lisi, file = lisi_rds_path)
+```
+
+LISI visualization: plot distributions and spatial patterns of batch mixing scores.
+```{r plot-lisi, fig.height=5, fig.width=7, message=F, warning=FALSE, eval = T}
+lisi <- readRDS(lisi_rds_path)
+seurat$lisi_batch <- lisi$batch
+hist(lisi$batch, breaks = 200)
+FeaturePlot(seurat, features = 'lisi_batch', raster = F, reduction = 'UMAP_RNA_integrated')
+VlnPlot(seurat, features = 'lisi_batch', pt.size = 0)+NoLegend()
+```
+
+## QC metrics
+QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 distributions.
+```{r qc-metric-violins, fig.height=6, fig.width=12, message=FALSE, warning=FALSE, eval = T}
+VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'percent.mt', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'Malat1', pt.size = 0)+NoLegend()
+```
+
+## Differential expression (cluster markers)
+Marker discovery: run bulk-style marker analysis across integrated clusters.
+```{r find-cluster-markers, eval = T}
+seurat <- JoinLayers(seurat, assay = 'RNA')
+FindMarkersBulk(seurat, clus_ident = 'RNA_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated')
+```
+
+### Top marker heatmap RNA
+Marker heatmap: render scaled average expression heatmap for top RNA markers when available.
+```{r marker-heatmap-rna, fig.height=16, fig.width=5, message=F, warning=FALSE, eval = T}
+paletteLength <- 50
+myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+myBreaks <- c(seq(-3, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(3/paletteLength, 3, length.out=floor(paletteLength/2)))
+mat <- NULL
+if (!file.exists(markers_csv_path)) {
+  message('Skipping RNA marker heatmap because markers file was not found: ', markers_csv_path)
+} else {
+  markers <- read.csv(markers_csv_path)
+  markers <- markers$x
+  avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'RNA_integrated_clusters_0.75')
+  avg_exp <- avg_exp$RNA
+  mat <- t(scale(t(avg_exp)))
+  pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
+}
+```
+
