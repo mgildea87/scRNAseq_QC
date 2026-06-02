@@ -14,10 +14,13 @@ output:
 params:
   merged_rds_path: "merged_QC.rds"
   integrated_rds_path: "integrated.rds"
+  integrated_sct_rds_path: "integrated_SCT.rds"
   output_dir: "."
   integration_level: "Batch"
   lisi_rds_path: "lisi_integrated_RNA.rds"
+  lisi_sct_rds_path: "lisi_integrated_SCT.rds"
   markers_csv_path: "FindMarkersBulk_RNA_integrated/Top_markers.csv"
+  markers_sct_csv_path: "FindMarkersBulk_SCT_integrated/Top_markers.csv"
 ---
 
 <style type="text/css">
@@ -76,10 +79,12 @@ resolve_output_path <- function(path_val) {
 
 lisi_rds_path <- resolve_output_path(params$lisi_rds_path)
 markers_csv_path <- resolve_output_path(params$markers_csv_path)
+lisi_sct_rds_path <- resolve_output_path(params$lisi_sct_rds_path)
+markers_sct_csv_path <- resolve_output_path(params$markers_sct_csv_path)
 ```
 
 Track run progress by logging each code chunk as it starts, with timestamps.
-```{r chunk-progress-logging, include=FALSE}
+```{r chunk-progress-logging, include=FALSE, warning=F, message=F }
 safe_level <- gsub('[^A-Za-z0-9._-]+', '_', params$integration_level)
 chunk_log_dir <- file.path(params$output_dir, 'chunk_logs')
 dir.create(chunk_log_dir, showWarnings = FALSE, recursive = TRUE)
@@ -114,7 +119,7 @@ knitr::knit_hooks$set(document = function(x) {
 ```
 
 Input loading: read merged object and verify required integration metadata exists.
-```{r load-merged-object}
+```{r load-merged-object, warning=F, message=F }
 if (!file.exists(params$merged_rds_path)) {
   stop('Merged RDS not found: ', params$merged_rds_path)
 }
@@ -126,7 +131,7 @@ if (!integration_group_column %in% colnames(seurat@meta.data)) {
 ```
 
 Integration workflow: split by selected level, integrate RNA, cluster, and save output RDS.
-```{r integrate-rna}
+```{r integrate-log-norm, warning=F, message=F }
 print(paste('Integrating RNA at level:', params$integration_level))
 options(future.globals.maxSize = 8000 * 1024^8)
 
@@ -142,13 +147,38 @@ seurat <- IntegrateLayers(object = seurat, method = RPCAIntegration, orig.reduct
 seurat <- FindNeighbors(seurat, reduction = "integrated.rpca", dims = 1:30)
 seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = "RNA_integrated_clusters_0.75", algorithm = 4)
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'integrated.rpca', reduction.name = 'UMAP_RNA_integrated')
-saveRDS(seurat, file = params$integrated_rds_path)
+```
+
+SCT integration workflow: apply SCTransform, split by integration level, perform CCA integration, and save.
+```{r integrate-sct, warning=F, message=F }
+print(paste('Applying SCTransform and integrating SCT at level:', params$integration_level))
+options(future.globals.maxSize = 8000 * 1024^8)
+
+# Create a copy for SCT analysis
+seurat_sct <- seurat
+
+# Apply SCT normalization
+seurat_sct <- SCTransform(seurat_sct, assay = 'RNA', new.assay.name = 'SCT', verbose = FALSE)
+
+# Split SCT layers by integration group
+seurat_sct[["SCT"]] <- split(
+  seurat_sct[["SCT"]],
+  f = seurat_sct@meta.data[[integration_group_column]]
+)
+
+# Perform RPCA integration on SCT assay
+seurat_sct <- RunPCA(seurat_sct, assay = 'SCT', reduction.name = 'PCA_SCT_split')
+seurat_sct <- IntegrateLayers(object = seurat_sct, method = RPCAIntegration, orig.reduction = "PCA_SCT_split", new.reduction = "integrated.rpca.sct", verbose = FALSE, assay = 'SCT')
+seurat_sct <- FindNeighbors(seurat_sct, reduction = "integrated.rpca.sct", dims = 1:30, assay = 'SCT')
+seurat_sct <- FindClusters(seurat_sct, resolution = 0.75, cluster.name = "SCT_integrated_clusters_0.75", algorithm = 4)
+seurat_sct <- RunUMAP(seurat_sct, dims = 1:30, reduction = 'integrated.rpca.sct', reduction.name = 'UMAP_SCT_integrated', assay = 'SCT')
+saveRDS(seurat_sct, file = params$integrated_sct_rds_path)
 ```
 
 # UMAP plots
 ## Dim reduction plots
 Visual overview: plot integrated UMAP colored by sample_name, batch, and cluster identity.
-```{r integrated-umap-plots, fig.height=7, fig.width=10, message=FALSE, warning=F, eval = T}
+```{r integrated-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
 
 Idents(seurat) <- 'sample_name'
 DimPlot(seurat, reduction = 'UMAP_RNA_integrated', raster = F)
@@ -163,7 +193,7 @@ DimPlot(seurat, reduction = 'UMAP_RNA_integrated', raster = F)
 ## Abundance
 
 Cluster composition: compute and visualize per-sample and per-batch abundance distributions.
-```{r cluster-abundance-plots, fig.height=6, fig.width=16, message=F, warning=FALSE, eval = T}
+```{r cluster-abundance-plots, fig.height=6, fig.width=16, warning=F, message=F, eval = T}
 prop_table <- as.data.frame(prop.table(table(seurat$sample_name, seurat$RNA_integrated_clusters_0.75), margin = 1))
 sample_batch_map <- unique(seurat@meta.data[, c('sample_name', 'batch')])
 sample_batch_map$sample_name <- as.character(sample_batch_map$sample_name)
@@ -179,14 +209,14 @@ ggplot(prop_table, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxplot()
 
 ## LISI
 LISI computation: calculate batch mixing scores from integrated embeddings and save to disk.
-```{r compute-lisi, eval = T}
+```{r compute-lisi, eval = T, warning=F, message=F }
 pca <- seurat@reductions$integrated.rpca@cell.embeddings
 lisi <- compute_lisi(pca[,c(1:30)], seurat@meta.data, label_colnames = c('batch'))
 saveRDS(lisi, file = lisi_rds_path)
 ```
 
 LISI visualization: plot distributions and spatial patterns of batch mixing scores.
-```{r plot-lisi, fig.height=5, fig.width=7, message=F, warning=FALSE, eval = T}
+```{r plot-lisi, fig.height=5, fig.width=7, warning=F, message=F, eval = T}
 lisi <- readRDS(lisi_rds_path)
 seurat$lisi_batch <- lisi$batch
 hist(lisi$batch, breaks = 200)
@@ -196,7 +226,7 @@ VlnPlot(seurat, features = 'lisi_batch', pt.size = 0)+NoLegend()
 
 ## QC metrics
 QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 distributions.
-```{r qc-metric-violins, fig.height=6, fig.width=12, message=FALSE, warning=FALSE, eval = T}
+```{r qc-metric-violins, fig.height=6, fig.width=12, warning=F, message=F, eval = T}
 VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0)+NoLegend()
 VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0)+NoLegend()
 VlnPlot(seurat, features = 'percent.mt', pt.size = 0)+NoLegend()
@@ -205,14 +235,14 @@ VlnPlot(seurat, features = 'Malat1', pt.size = 0)+NoLegend()
 
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across integrated clusters.
-```{r find-cluster-markers, eval = T}
+```{r find-cluster-markers, eval = T, warning=F, message=F}
 seurat <- JoinLayers(seurat, assay = 'RNA')
 FindMarkersBulk(seurat, clus_ident = 'RNA_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated')
 ```
 
 ### Top marker heatmap RNA
 Marker heatmap: render scaled average expression heatmap for top RNA markers when available.
-```{r marker-heatmap-rna, fig.height=16, fig.width=5, message=F, warning=FALSE, eval = T}
+```{r marker-heatmap-rna, fig.height=24, fig.width=5, warning=F, message=F, eval = T}
 paletteLength <- 50
 myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
 myBreaks <- c(seq(-3, 0, length.out=ceiling(paletteLength/2) + 1), 
@@ -225,6 +255,93 @@ if (!file.exists(markers_csv_path)) {
   markers <- markers$x
   avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'RNA_integrated_clusters_0.75')
   avg_exp <- avg_exp$RNA
+  mat <- t(scale(t(avg_exp)))
+  pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
+}
+```
+
+# SCT Integration Analysis
+
+## SCT UMAP plots
+### Dim reduction plots
+Visual overview: plot SCT-integrated UMAP colored by sample_name, batch, and cluster identity.
+```{r sct-integrated-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+
+Idents(seurat_sct) <- 'sample_name'
+DimPlot(seurat_sct, reduction = 'UMAP_SCT_integrated', raster = F)
+
+Idents(seurat_sct) <- 'batch'
+DimPlot(seurat_sct, reduction = 'UMAP_SCT_integrated', raster = F)
+
+Idents(seurat_sct) <- 'SCT_integrated_clusters_0.75'
+DimPlot(seurat_sct, reduction = 'UMAP_SCT_integrated', raster = F)
+```
+
+### Abundance
+
+Cluster composition: compute and visualize per-sample and per-batch abundance distributions for SCT integration.
+```{r sct-cluster-abundance-plots, fig.height=6, fig.width=16, warning=F, message=F, eval = T}
+prop_table_sct <- as.data.frame(prop.table(table(seurat_sct$sample_name, seurat_sct$SCT_integrated_clusters_0.75), margin = 1))
+sample_batch_map <- unique(seurat_sct@meta.data[, c('sample_name', 'batch')])
+sample_batch_map$sample_name <- as.character(sample_batch_map$sample_name)
+prop_table_sct$batch <- sample_batch_map$batch[match(as.character(prop_table_sct$Var1), sample_batch_map$sample_name)]
+ggplot(prop_table_sct, aes(y = Freq, x = Var2, color = Var1))+geom_point()+theme_classic()
+ggplot(prop_table_sct, aes(y = Freq, x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('Frequency')
+ggplot(prop_table_sct, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('log10(Frequency)')
+```
+
+### LISI
+LISI computation: calculate batch mixing scores from SCT-integrated embeddings and save to disk.
+```{r compute-lisi-sct, eval = T, warning=F, message=F }
+pca_sct <- seurat_sct@reductions$integrated.rpca.sct@cell.embeddings
+lisi_sct <- compute_lisi(pca_sct[,c(1:30)], seurat_sct@meta.data, label_colnames = c('batch'))
+saveRDS(lisi_sct, file = lisi_sct_rds_path)
+```
+
+LISI visualization: plot distributions and spatial patterns of batch mixing scores for SCT integration.
+```{r plot-lisi-sct, fig.height=5, fig.width=7, warning=F, message=F, eval = T}
+lisi_sct <- readRDS(lisi_sct_rds_path)
+seurat_sct$lisi_batch <- lisi_sct$batch
+hist(lisi_sct$batch, breaks = 200)
+FeaturePlot(seurat_sct, features = 'lisi_batch', raster = F, reduction = 'UMAP_SCT_integrated')
+VlnPlot(seurat_sct, features = 'lisi_batch', pt.size = 0)+NoLegend()
+```
+
+### QC metrics
+QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 distributions for SCT integration.
+```{r sct-qc-metric-violins, fig.height=6, fig.width=12, warning=F, message=F, eval = T}
+VlnPlot(seurat_sct, features = 'nCount_RNA', pt.size = 0)+NoLegend()
+VlnPlot(seurat_sct, features = 'nFeature_RNA', pt.size = 0)+NoLegend()
+VlnPlot(seurat_sct, features = 'percent.mt', pt.size = 0)+NoLegend()
+VlnPlot(seurat_sct, features = 'Malat1', pt.size = 0)+NoLegend()
+```
+
+### Differential expression (cluster markers)
+Marker discovery: run bulk-style marker analysis across SCT-integrated clusters.
+```{r find-cluster-markers-sct, eval = T, warning=F, message=F}
+seurat_sct <- JoinLayers(seurat_sct, assay = 'SCT')
+FindMarkersBulk(seurat_sct, clus_ident = 'SCT_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'SCT', out_dir = 'FindMarkersBulk_SCT_integrated')
+```
+
+### Top marker heatmap SCT
+Marker heatmap: render scaled average expression heatmap for top SCT markers when available.
+```{r marker-heatmap-sct, fig.height=24, fig.width=5, warning=F, message=F, eval = T}
+paletteLength <- 50
+myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+myBreaks <- c(seq(-3, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(3/paletteLength, 3, length.out=floor(paletteLength/2)))
+mat <- NULL
+if (!file.exists(markers_sct_csv_path)) {
+  message('Skipping SCT marker heatmap because markers file was not found: ', markers_sct_csv_path)
+} else {
+  markers <- read.csv(markers_sct_csv_path)
+  markers <- markers$x
+  avg_exp <- AverageExpression(seurat_sct, assays = 'SCT', features = markers, group.by = 'SCT_integrated_clusters_0.75')
+  avg_exp <- avg_exp$SCT
   mat <- t(scale(t(avg_exp)))
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
 }

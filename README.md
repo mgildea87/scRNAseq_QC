@@ -1,4 +1,4 @@
-# Single-sample 10x scRNA-seq QC pipeline
+# 10x scRNA-seq QC and processing pipeline
 
 Generates a self-contained HTML QC report and a filtered Seurat RDS object for
 each sample processed by CellRanger.  
@@ -273,9 +273,3 @@ The Rmd template performs the following steps in order:
 13. Top marker heatmap (Wilcoxon, top 20 per cluster)
 14. Doublet detection with `scDblFinder` (annotated, not removed)
 15. Save filtered + annotated Seurat object to RDS
-
-## Notes
-
-- The repository is version-controlled at https://github.com/mgildea87/scRNAseq_QC.
-- The old `merge_RNAseq.Rmd` file has been removed and is not part of the current pipeline.
-- TF and hemoglobin support files live under `support_files/` and are resolved relative to the R Markdown templates so cloned copies remain portable.
