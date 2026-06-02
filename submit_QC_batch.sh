@@ -21,6 +21,7 @@
 #   --run_integration <TRUE/FALSE> render integrate_RNA.Rmd after merge (default: FALSE)
 #   --integration_level <Batch|Sample> required when integration runs
 #   --integration_only <TRUE/FALSE> run only integration from merged_QC.rds (default: FALSE)
+#   --use_cellbender <TRUE/FALSE> use cellbender_filtered.h5 as filtered input (default: FALSE)
 # =============================================================================
 
 set -euo pipefail
@@ -41,6 +42,7 @@ SKIP_MERGE="FALSE"
 RUN_INTEGRATION="FALSE"
 INTEGRATION_LEVEL=""
 INTEGRATION_ONLY="FALSE"
+USE_CELLBENDER="FALSE"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --run_integration) RUN_INTEGRATION="$2"; shift 2 ;;
     --integration_level) INTEGRATION_LEVEL="$2"; shift 2 ;;
     --integration_only) INTEGRATION_ONLY="$2"; shift 2 ;;
+    --use_cellbender) USE_CELLBENDER="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -91,6 +94,16 @@ fi
 
 if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
   RUN_INTEGRATION="TRUE"
+fi
+
+USE_CELLBENDER_LOWER="$(echo "${USE_CELLBENDER}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${USE_CELLBENDER_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
+  USE_CELLBENDER="TRUE"
+elif [[ "${USE_CELLBENDER_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
+  USE_CELLBENDER="FALSE"
+else
+  echo "ERROR: --use_cellbender must be TRUE or FALSE." >&2
+  exit 1
 fi
 
 INTEGRATION_LEVEL_LOWER="$(echo "${INTEGRATION_LEVEL}" | tr '[:upper:]' '[:lower:]')"
@@ -139,7 +152,7 @@ fi
 echo "Submitting ${#SAMPLES[@]} job(s)..."
 echo "  Sample sheet : ${SAMPLE_SHEET}"
 echo "  Output dir   : ${OUTPUT_DIR}"
-echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}"
+echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}"
 echo "----------------------------------------------"
 
 if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
@@ -161,13 +174,15 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Task     : integration only\"
+      echo \"use_cellbender: ${USE_CELLBENDER}\"
       echo \"Start    : \$(date)\"
       Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
         --integration_only TRUE \
-        --integration_level \"${INTEGRATION_LEVEL}\"
-      echo \"Finished : \$(date)\"
+        --integration_level \"${INTEGRATION_LEVEL}\" \
+        --outs_subdir  \"${OUTS_SUBDIR}\" \
+        --use_cellbender \"${USE_CELLBENDER}\"
     ")
   echo "  Submitted: integration-only job  (job ${INTEGRATE_JOB_ID})"
   echo "----------------------------------------------"
@@ -199,13 +214,15 @@ for SAMPLE in "${SAMPLES[@]}"; do
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Sample   : ${SAMPLE}\"
+      echo \"use_cellbender: ${USE_CELLBENDER}\"
       echo \"Start    : \$(date)\"
       Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
         --template     \"${TEMPLATE_DIR}/sample_QC.Rmd\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --sample_name  \"${SAMPLE}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
-        --outs_subdir  \"${OUTS_SUBDIR}\"
+        --outs_subdir  \"${OUTS_SUBDIR}\" \
+        --use_cellbender \"${USE_CELLBENDER}\"
       echo \"Finished : \$(date)\"
     ")
   echo "  Submitted: ${SAMPLE}  (job ${JOB_ID})"

@@ -76,9 +76,15 @@ Treatment_1,/path/to/cellranger/count-Treatment-1,A,500,25000,250,6000,20,1
 
 `Control_1` uses all MAD-based defaults. `Treatment_1` uses hardcoded thresholds.
 
-Matrix folder names are auto-detected from the chosen base directory as long as
-they contain valid 10x MEX files (`matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and
-`features.tsv(.gz)` or `genes.tsv(.gz)`).
+Matrix inputs are auto-detected from the chosen base directory.
+Supported input formats:
+
+- 10x MEX directories containing `matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and
+  `features.tsv(.gz)` or `genes.tsv(.gz)`
+- 10x-style `.h5` or `.hdf5` files (standard mode uses `filtered` / `raw` filename matching; CellBender filtered input is selected explicitly via `--use_cellbender TRUE` and `cellbender_filtered.h5`/`.hdf5`)
+
+For `.h5` inputs, the QC template currently expects one scRNA matrix per file.
+CellBender filtered input is opt-in via `--use_cellbender TRUE`.
 
 > **Tip:** Run the pipeline on each sample with default thresholds first,
 > inspect the QC reports, then rerun with hardcoded thresholds for any samples
@@ -171,6 +177,17 @@ rmarkdown::render(
     output_dir    = "results/QC"
   )
 )
+
+# Example: .h5 inputs (including CellBender outputs)
+rmarkdown::render(
+  "sample_QC.Rmd",
+  params = list(
+    sample_name   = "Control_1",
+    filtered_path = "/path/to/cellbender_filtered.h5",
+    raw_path      = "/path/to/raw_feature_bc_matrix.h5",
+    output_dir    = "results/QC"
+  )
+)
 ```
 
 ### Many samples on the cluster (SLURM, `submit_QC_batch.sh`)
@@ -206,6 +223,7 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 | `--sample_sheet` | *(required)* | Absolute path to CSV sample sheet |
 | `--output_dir` | `QC` | Directory for HTML reports, RDS files, and logs |
 | `--outs_subdir` | `outs` | Subdirectory inside `cellranger_dir` used as the search base for filtered/raw matrix folders. Set to `""` if `cellranger_dir` already points to the base directory containing those folders |
+| `--use_cellbender` | `FALSE` | If `TRUE`, filtered input must resolve to `cellbender_filtered.h5` (or `.hdf5`); if `FALSE`, standard filtered matrix autodetection is used |
 | `--mem` | `32` | Memory per job in GB |
 | `--merge_mem` | `64` | Memory for the merge job in GB |
 | `--integration_mem` | `64` | Memory for the integration job in GB |
@@ -220,6 +238,7 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 bash /path/to/submit_QC_batch.sh \
   --sample_sheet /abs/path/to/samples.csv \
   --output_dir   /abs/path/to/results/QC \
+  --use_cellbender TRUE \
   --mem          32 \
   --merge_mem    96 \
   --integration_mem 128
@@ -258,7 +277,7 @@ When `--run_integration TRUE` is used and merge succeeds, the integration step c
 
 The Rmd template performs the following steps in order:
 
-1. Load CellRanger filtered and raw count matrices
+1. Load filtered and raw count matrices (10x MEX folders or .h5 files)
 2. Barcode rank (knee) plot
 3. Remove genes detected in fewer than 0.1% of barcodes
 4. Compute per-cell QC metrics: UMI count, genes detected, % mitochondrial, % haemoglobin

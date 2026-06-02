@@ -16,6 +16,7 @@ params:
   batch:            "A"
   filtered_path:    "filtered_feature_bc_matrix"
   raw_path:         "raw_feature_bc_matrix"
+  support_dir:      "support_files"
   output_dir:       "."
   # Per-metric hard thresholds. Leave as NA to use the MAD-based defaults.
   min_nCount_RNA:   NA
@@ -38,10 +39,23 @@ params:
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 template_dir <- normalizePath(knitr::current_input(dir = TRUE), mustWork = FALSE)
-qc_support_dir <- file.path(template_dir, 'support_files')
+qc_support_dir <- normalizePath(params$support_dir, mustWork = FALSE)
 
 find_qc_support_file <- function(filename) {
-  file.path(qc_support_dir, filename)
+  candidates <- unique(c(
+    file.path(qc_support_dir, filename),
+    file.path(template_dir, 'support_files', filename),
+    file.path(getwd(), 'support_files', filename)
+  ))
+
+  found <- candidates[file.exists(candidates)]
+  if (length(found) > 0L) return(found[[1L]])
+
+  stop(
+    'Support file not found: ', filename,
+    '\nSearched:\n  ', paste(candidates, collapse = '\n  '),
+    call. = FALSE
+  )
 }
 ```
 
@@ -56,6 +70,21 @@ cat(sprintf('\n=== sample_QC run started for %s: %s ===\n',
             format(Sys.time(), '%Y-%m-%d %H:%M:%S')),
     file = progress_log,
     append = TRUE)
+
+param_lines <- c(
+  sprintf('[%s] PARAM sample_name=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$sample_name)),
+  sprintf('[%s] PARAM batch=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$batch)),
+  sprintf('[%s] PARAM filtered_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$filtered_path)),
+  sprintf('[%s] PARAM raw_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$raw_path)),
+  sprintf('[%s] PARAM output_dir=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$output_dir)),
+  sprintf('[%s] PARAM min_nCount_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nCount_RNA)),
+  sprintf('[%s] PARAM max_nCount_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nCount_RNA)),
+  sprintf('[%s] PARAM min_nFeature_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nFeature_RNA)),
+  sprintf('[%s] PARAM max_nFeature_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nFeature_RNA)),
+  sprintf('[%s] PARAM max_percent_mt=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_percent_mt)),
+  sprintf('[%s] PARAM min_malat1=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_malat1))
+)
+cat(paste0(param_lines, '\n'), file = progress_log, append = TRUE)
 
 knitr::opts_hooks$set(label = function(options) {
   chunk_label <- if (is.null(options$label) || !nzchar(options$label)) {
@@ -114,11 +143,84 @@ library(presto)
 Loads the CellRanger-filtered matrix for QC analysis and the unfiltered (raw) matrix for barcode rank plotting. Species (human/mouse) is auto-detected from gene symbol conventions and used to configure all downstream metric patterns.
 
 ```{r load-data}
-# Load the CellRanger-filtered and unfiltered (raw) count matrices.
-# Paths are supplied via params (filtered_path / raw_path) so this Rmd can be
-# rendered programmatically across many samples without editing the file.
-seurat     <- Read10X(params$filtered_path)
-raw_matrix <- Read10X(params$raw_path)
+# Load either 10x MEX directories or 10x/CellBender .h5 files.
+# This pipeline assumes a single scRNA count matrix per input.
+select_rna_counts <- function(x, label, input_path) {
+  if (inherits(x, "dgCMatrix") || is.matrix(x)) {
+    return(x)
+  }
+
+  if (!is.list(x) || length(x) == 0L) {
+    stop("Unsupported ", label, " input format at: ", input_path, call. = FALSE)
+  }
+
+  if (length(x) == 1L) {
+    return(x[[1L]])
+  }
+
+  stop(
+    "Multiple matrices detected in ", label, " input: ", input_path,
+    ". This QC pipeline expects a single scRNA matrix per input .h5 file.",
+    call. = FALSE
+  )
+}
+
+read_10x_input <- function(input_path, label) {
+  if (dir.exists(input_path)) {
+    return(select_rna_counts(Read10X(input_path), label, input_path))
+  }
+
+  if (file.exists(input_path) && grepl("\\.(h5|hdf5)$", input_path, ignore.case = TRUE)) {
+    return(select_rna_counts(Read10X_h5(input_path), label, input_path))
+  }
+
+  stop(
+    "Could not read ", label, " input: ", input_path,
+    ". Expected a 10x MEX directory or an .h5/.hdf5 file.",
+    call. = FALSE
+  )
+}
+
+describe_loaded_files <- function(input_path) {
+  if (dir.exists(input_path)) {
+    children <- list.files(input_path, full.names = TRUE, recursive = FALSE)
+    files <- children[file.exists(children)]
+    keep <- files[grepl("(matrix\\.mtx(\\.gz)?|barcodes\\.tsv(\\.gz)?|(features|genes)\\.tsv(\\.gz)?)$",
+                       basename(files), ignore.case = TRUE)]
+    if (length(keep) > 0L) return(sort(normalizePath(keep, mustWork = FALSE)))
+    return(normalizePath(input_path, mustWork = FALSE))
+  }
+
+  if (file.exists(input_path)) {
+    return(normalizePath(input_path, mustWork = TRUE))
+  }
+
+  input_path
+}
+
+seurat     <- read_10x_input(params$filtered_path, "filtered")
+raw_matrix <- read_10x_input(params$raw_path, "raw")
+
+filtered_loaded <- describe_loaded_files(params$filtered_path)
+raw_loaded <- describe_loaded_files(params$raw_path)
+
+cat('Filtered input path:', params$filtered_path, '\n')
+cat('Raw input path:', params$raw_path, '\n')
+cat('Filtered file(s) loaded:\n')
+cat(paste0('  - ', filtered_loaded), sep = '\n')
+cat('\nRaw file(s) loaded:\n')
+cat(paste0('  - ', raw_loaded), sep = '\n')
+cat('\n')
+
+if (exists('progress_log')) {
+  log_lines <- c(
+    sprintf('[%s] INPUT filtered path: %s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), params$filtered_path),
+    if (length(filtered_loaded) > 0L) sprintf('[%s] INPUT filtered file: %s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), filtered_loaded) else character(0),
+    sprintf('[%s] INPUT raw path: %s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), params$raw_path),
+    if (length(raw_loaded) > 0L) sprintf('[%s] INPUT raw file: %s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), raw_loaded) else character(0)
+  )
+  cat(paste0(log_lines, '\n'), file = progress_log, append = TRUE)
+}
 
 # Detect species from feature naming conventions so QC metrics adapt to
 # human/mouse gene symbol casing and marker patterns.
@@ -186,6 +288,12 @@ seurat     <- seurat[keep_genes, ]
 Wraps the sparse count matrix in a Seurat object and computes the three primary per-cell QC covariates: UMI count (`nCount_RNA`), genes detected (`nFeature_RNA`), and mitochondrial read fraction (`percent.mt`, pattern chosen by species).
 
 ```{r create-seurat-object}
+# Require at least 10 UMIs per cell before creating the Seurat object.
+cell_umi_totals <- Matrix::colSums(seurat)
+keep_cells_10 <- cell_umi_totals >= 10
+cat('Keeping', sum(keep_cells_10), 'of', length(keep_cells_10), 'cells with >= 10 UMIs\n')
+seurat <- seurat[, keep_cells_10, drop = FALSE]
+
 # Convert the filtered sparse matrix to a Seurat object and compute per-cell QC metrics
 seurat               <- CreateSeuratObject(seurat, min.cells = 0, min.features = 0)
 seurat[["percent.mt"]] <- PercentageFeatureSet(seurat, pattern = mt_pattern)
@@ -230,14 +338,14 @@ Calculates per-metric medians and MADs, then tabulates the metric value at ±1�
 
 ```{r compute-mad-thresholds}
 # ── Per-metric medians and MADs ───────────────────────────────────────────────
-nCount_RNA_med   <- median(seurat$nCount_RNA)
-nCount_RNA_mad   <- median(abs(seurat$nCount_RNA   - nCount_RNA_med))
+nCount_RNA_med   <- median(seurat$nCount_RNA, na.rm = TRUE)
+nCount_RNA_mad   <- median(abs(seurat$nCount_RNA   - nCount_RNA_med), na.rm = TRUE)
 
-nFeature_RNA_med <- median(seurat$nFeature_RNA)
-nFeature_RNA_mad <- median(abs(seurat$nFeature_RNA - nFeature_RNA_med))
+nFeature_RNA_med <- median(seurat$nFeature_RNA, na.rm = TRUE)
+nFeature_RNA_mad <- median(abs(seurat$nFeature_RNA - nFeature_RNA_med), na.rm = TRUE)
 
-percent.mt_med   <- median(seurat$percent.mt)
-percent.mt_mad   <- median(abs(seurat$percent.mt   - percent.mt_med))
+percent.mt_med   <- median(seurat$percent.mt, na.rm = TRUE)
+percent.mt_mad   <- median(abs(seurat$percent.mt   - percent.mt_med), na.rm = TRUE)
 
 cat('nCount_RNA   median =', nCount_RNA_med,   '| MAD =', nCount_RNA_mad,   '\n')
 cat('nFeature_RNA median =', nFeature_RNA_med, '| MAD =', nFeature_RNA_mad, '\n')
@@ -485,20 +593,43 @@ thresh_max_mt       <- resolve_thresh(params$max_percent_mt,
                          percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$mad == 5])
 thresh_min_malat1   <- resolve_thresh(params$min_malat1, 1)
 
+# Guard against NA mitochondrial thresholds (seen in some CellBender outputs)
+# so QC filtering does not drop all cells due to logical NA comparisons.
+if (is.na(thresh_max_mt)) {
+  thresh_max_mt <- Inf
+  cat('percent.mt threshold was NA; using Inf (no mitochondrial upper-bound filter).\n')
+}
+
 cat('Filter thresholds applied:\n')
 cat('  nCount_RNA   :', thresh_min_nCount,   '–', thresh_max_nCount,   '\n')
 cat('  nFeature_RNA :', thresh_min_nFeature, '–', thresh_max_nFeature, '\n')
-cat('  percent.mt   : <', thresh_max_mt,  '\n')
+cat('  percent.mt   : <=', thresh_max_mt,  '\n')
 cat('  MALAT1 (norm): >', thresh_min_malat1, '\n')
+
+# Log pass counts per criterion to make over-filtering easier to diagnose.
+pass_nCount_min <- seurat$nCount_RNA >  thresh_min_nCount
+pass_nCount_max <- seurat$nCount_RNA <= thresh_max_nCount
+pass_nFeat_min  <- seurat$nFeature_RNA >  thresh_min_nFeature
+pass_nFeat_max  <- seurat$nFeature_RNA <= thresh_max_nFeature
+pass_mt_max     <- is.na(seurat$percent.mt) | seurat$percent.mt <= thresh_max_mt
+
+cat('Cells passing each criterion before combined filter:\n')
+cat('  nCount_RNA   > min :', sum(pass_nCount_min), '/', length(pass_nCount_min), '\n')
+cat('  nCount_RNA   <= max:', sum(pass_nCount_max), '/', length(pass_nCount_max), '\n')
+cat('  nFeature_RNA > min :', sum(pass_nFeat_min),  '/', length(pass_nFeat_min),  '\n')
+cat('  nFeature_RNA <= max:', sum(pass_nFeat_max),  '/', length(pass_nFeat_max),  '\n')
+cat('  percent.mt   <= max:', sum(pass_mt_max),     '/', length(pass_mt_max),     '\n')
 
 # ── Apply filter ───────────────────────────────────────────────────────────────
 seurat <- subset(
   seurat,
+  nCount_RNA   >  0                 &
+  nFeature_RNA >  0                 &
   nCount_RNA   >  thresh_min_nCount   &
-  nCount_RNA   <  thresh_max_nCount   &
+  nCount_RNA   <= thresh_max_nCount   &
   nFeature_RNA >  thresh_min_nFeature &
-  nFeature_RNA <  thresh_max_nFeature &
-  percent.mt   <  thresh_max_mt
+  nFeature_RNA <= thresh_max_nFeature &
+  (is.na(percent.mt) | percent.mt <= thresh_max_mt)
 )
 if (!is.na(malat1_feature)) {
   malat_vals <- Seurat::FetchData(seurat, vars = malat1_feature, layer = 'data')[, 1]
@@ -698,6 +829,16 @@ ggplot(cell_attr, aes(n_umi, n_gene)) +
 ```{r sctransform-model, fig.height=4, fig.width=16}
 # Fit SCTransform model to evaluate variance-stabilisation quality.
 # future.globals.maxSize set to 8 GB to accommodate large count matrices.
+# Guard against zero-UMI cells, which produce -Inf log_umi and break sctransform::vst.
+zero_umi_cells <- colnames(seurat)[seurat$nCount_RNA <= 0 | is.na(seurat$nCount_RNA)]
+if (length(zero_umi_cells) > 0) {
+  cat('Removing', length(zero_umi_cells), 'cells with nCount_RNA <= 0 before SCTransform model fitting.\n')
+  seurat <- subset(seurat, cells = setdiff(colnames(seurat), zero_umi_cells))
+}
+if (ncol(seurat) == 0) {
+  stop('No cells remain after removing zero-UMI cells prior to SCTransform.', call. = FALSE)
+}
+
 set.seed(44)
 options(future.globals.maxSize = 8000 * 1024^6) 
 vst_out <- sctransform::vst(
@@ -747,21 +888,39 @@ Projects log-scale UMI count and gene count onto each UMAP and visualises QC met
 seurat$nCount_RNA_log   <- log10(seurat$nCount_RNA)
 seurat$nFeature_RNA_log <- log10(seurat$nFeature_RNA)
 
+safe_vlnplot <- function(obj, group_col, title_text) {
+  meta <- obj@meta.data
+  if (!group_col %in% colnames(meta)) {
+    stop('Grouping column not found in meta.data: ', group_col, call. = FALSE)
+  }
+
+  plot_one <- function(feature, ylab) {
+    ggplot(meta, aes(x = .data[[group_col]], y = .data[[feature]], fill = .data[[group_col]])) +
+      geom_violin(trim = FALSE) +
+      theme_classic() +
+      theme(legend.position = 'none', axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(x = group_col, y = ylab)
+  }
+
+  wrap_plots(
+    plot_one('nCount_RNA_log', 'log10(nCount_RNA)'),
+    plot_one('nFeature_RNA_log', 'log10(nFeature_RNA)'),
+    plot_one('percent.mt', '% mitochondrial'),
+    ncol = 1
+  ) + plot_annotation(title = title_text)
+}
+
 FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'umap_rna') +
   ggtitle('RNA UMAP: log10 nCount_RNA')
 FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'umap_rna') +
   ggtitle('RNA UMAP: log10 nFeature_RNA')
-VlnPlot(seurat,
-        features = c('nCount_RNA_log', 'nFeature_RNA_log', 'percent.mt'),
-        group.by = 'seurat_clusters_rna', stack = TRUE, flip = TRUE)
+safe_vlnplot(seurat, 'seurat_clusters_rna', 'RNA clusters: QC metrics')
 
 FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'umap_sct') +
   ggtitle('SCT UMAP: log10 nCount_RNA')
 FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'umap_sct') +
   ggtitle('SCT UMAP: log10 nFeature_RNA')
-VlnPlot(seurat,
-        features = c('nCount_RNA_log', 'nFeature_RNA_log', 'percent.mt'),
-        group.by = 'seurat_clusters_sct', stack = TRUE, flip = TRUE)
+safe_vlnplot(seurat, 'seurat_clusters_sct', 'SCT clusters: QC metrics')
 ```
 
 # Red blood cells (post-clustering)

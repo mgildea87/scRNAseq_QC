@@ -29,8 +29,8 @@
 ```
 
 ## After Validation
-- [ ] Add functionality to take in a .h5 file such as those from cellbender
-- [ ] Add SCTransform integration to the integration workflow as an addition
+- [x] Add functionality to take in a .h5 file such as those from cellbender
+- [x] Add SCTransform integration to the integration workflow as an addition
 - [ ] Add multiple cluster resolutions?
 - [ ] Update README examples with the exact final tested integration-only command(s). update wording as well.
 - [ ] Add a troubleshooting note in README for integration chunk failures:
