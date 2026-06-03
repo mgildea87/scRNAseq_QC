@@ -677,6 +677,7 @@ render_sample <- function(row) {
         batch            = row[["batch"]],
         filtered_path    = row[["filtered_path"]],
         raw_path         = row[["raw_path"]],
+        use_cellbender   = isTRUE(opt$use_cellbender),
         support_dir      = template_support_dir,
         output_dir       = opt$output_dir,
         min_nCount_RNA   = suppressWarnings(as.numeric(row[["min_nCount_RNA"]])),

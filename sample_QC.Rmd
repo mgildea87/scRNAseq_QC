@@ -16,6 +16,7 @@ params:
   batch:            "A"
   filtered_path:    "filtered_feature_bc_matrix"
   raw_path:         "raw_feature_bc_matrix"
+  use_cellbender:   FALSE
   support_dir:      "support_files"
   output_dir:       "."
   # Per-metric hard thresholds. Leave as NA to use the MAD-based defaults.
@@ -124,6 +125,7 @@ cat(paste('Working directory:', getwd()))
 library(ggplot2)
 library(patchwork)   # combine ggplot2 panels with +
 library(viridis)
+library(ggrepel)
 
 # ── Data manipulation ──────────────────────────────────────────────────────────
 library(dplyr)
@@ -258,7 +260,7 @@ cat('RBC genes detected:', length(rbc_features), '\n')
 # Barcode rank plots
 Horizontal red line marks the UMI threshold determined by CellRanger that separates putative cells from empty droplets. If cellbender was used, the horizontal line corresponds to the minimum non-zero UMI barcode.
 The second panel shows a moving local slope of the log-rank vs log-UMI curve and labels an ambient-peak candidate in the empty-droplet tail. This is still in development.
-If the filtered input appears to be a CellBender output, an additional barcode rank panel is generated from that filtered matrix.
+If `--use_cellbender TRUE` was used, an additional barcode rank panel is generated from the CellBender filtered matrix.
 
 ```{r barcode-rank-plot, fig.width=11, fig.height=9}
 # Rank all barcodes by descending UMI count and plot the knee curve;
@@ -419,6 +421,11 @@ rank_plot <- ggplot(bc_rank_data, aes(x = log_rank, y = log_umi)) +
   ylab('log10(UMI counts)') +
   xlab('log10(barcode rank)')
 
+if (is.finite(cellranger_threshold)) {
+  rank_plot <- rank_plot +
+    geom_hline(yintercept = cellranger_threshold, color = 'firebrick', linetype = 'dashed')
+}
+
 slope_plot <- ggplot(bc_rank_data, aes(x = log_rank, y = moving_slope)) +
   geom_line(color = 'darkgreen', linewidth = 0.4, na.rm = TRUE) +
   theme_classic() +
@@ -468,9 +475,8 @@ if (!is.null(ambient_peak) && nrow(ambient_peak) == 1) {
 
 rank_plot / slope_plot + plot_layout(heights = c(2, 2))
 
-# Show a second rank plot only when filtered input looks like CellBender output.
-is_cellbender_input <- any(grepl('cellbender', c(params$filtered_path, filtered_loaded),
-                                 ignore.case = TRUE))
+# Show a second rank plot only when --use_cellbender TRUE was requested.
+is_cellbender_input <- isTRUE(params$use_cellbender)
 if (is_cellbender_input) {
   cb_rank_data <- data.frame(UMI_counts = as.numeric(Matrix::colSums(seurat)))
   cb_rank_data <- arrange(cb_rank_data, desc(UMI_counts))
@@ -492,7 +498,87 @@ if (is_cellbender_input) {
 
   cellbender_rank_plot
 } else {
-  cat('Skipping CellBender barcode rank panel (filtered input is not detected as CellBender output).\n')
+  cat('Skipping CellBender barcode rank panel (--use_cellbender TRUE was not set).\n')
+}
+```
+
+# CellBender vs raw gene-level UMI comparison
+Compares total per-gene UMIs in the CellBender filtered matrix versus the raw matrix, restricted to barcodes retained in the CellBender matrix. Only the top 25% most changed genes by absolute percent difference are plotted, and the top 30 are labeled. Genes with a total UMI count below 10 in either matrix are excluded.
+
+```{r cellbender-vs-raw-gene-umi-scatter, fig.width=9, fig.height=7}
+if (!isTRUE(params$use_cellbender)) {
+  cat('Skipping CellBender-vs-raw gene UMI scatter (--use_cellbender TRUE was not set).\n')
+} else {
+  common_barcodes <- intersect(colnames(seurat), colnames(raw_matrix))
+  common_genes <- intersect(rownames(seurat), rownames(raw_matrix))
+
+  if (length(common_barcodes) == 0L || length(common_genes) == 0L) {
+    cat('Skipping CellBender-vs-raw gene UMI scatter: no overlapping barcodes or genes.\n')
+  } else {
+    cb_gene_totals <- as.numeric(Matrix::rowSums(seurat[common_genes, common_barcodes, drop = FALSE]))
+    raw_gene_totals <- as.numeric(Matrix::rowSums(raw_matrix[common_genes, common_barcodes, drop = FALSE]))
+
+    gene_umi_cmp <- data.frame(
+      gene = common_genes,
+      raw_umi = raw_gene_totals,
+      cellbender_umi = cb_gene_totals,
+      stringsAsFactors = FALSE
+    )
+
+    gene_umi_cmp <- gene_umi_cmp[
+      gene_umi_cmp$raw_umi >= 10 & gene_umi_cmp$cellbender_umi >= 10,
+      , drop = FALSE
+    ]
+
+    if (nrow(gene_umi_cmp) == 0L) {
+      cat('Skipping CellBender-vs-raw gene UMI scatter: no genes had >= 10 UMI in both matrices.\n')
+    } else {
+
+      gene_umi_cmp$pct_diff <- 100 * (gene_umi_cmp$cellbender_umi - gene_umi_cmp$raw_umi) / gene_umi_cmp$raw_umi
+      gene_umi_cmp$abs_pct_diff <- abs(gene_umi_cmp$pct_diff)
+
+      finite_abs_diff <- gene_umi_cmp$abs_pct_diff[is.finite(gene_umi_cmp$abs_pct_diff)]
+      if (length(finite_abs_diff) == 0L) {
+        cat('Skipping CellBender-vs-raw gene UMI scatter: percent differences are non-finite for all genes.\n')
+      } else {
+        diff_cutoff <- as.numeric(quantile(finite_abs_diff, probs = 0.75, names = FALSE, na.rm = TRUE))
+        genes_to_plot <- gene_umi_cmp[!is.finite(gene_umi_cmp$abs_pct_diff) |
+                                        gene_umi_cmp$abs_pct_diff >= diff_cutoff, , drop = FALSE]
+
+        if (nrow(genes_to_plot) == 0L) {
+          cat('Skipping CellBender-vs-raw gene UMI scatter: no genes passed top-25% change filter.\n')
+        } else {
+          label_n <- min(30L, nrow(genes_to_plot))
+          top_label_genes <- genes_to_plot[order(genes_to_plot$abs_pct_diff, decreasing = TRUE), , drop = FALSE][seq_len(label_n), , drop = FALSE]
+
+          cat('Plotting', nrow(genes_to_plot), 'genes (top 25% most changed by absolute percent difference) across',
+              length(common_barcodes), 'CellBender-retained barcodes.\n')
+
+          ggplot(genes_to_plot, aes(x = raw_umi + 1, y = cellbender_umi + 1)) +
+            geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'grey50') +
+            geom_point(aes(color = abs_pct_diff), alpha = 0.7, size = 1.2) +
+            ggrepel::geom_text_repel(
+              data = top_label_genes,
+              aes(label = gene),
+              size = 2.5,
+              color = 'black',
+              max.overlaps = Inf,
+              force = 1,
+              box.padding = 0.25,
+              point.padding = 0.1,
+              min.segment.length = 0
+            ) +
+            scale_x_log10() +
+            scale_y_log10() +
+            scale_color_viridis_c(option = 'magma', name = 'abs % diff') +
+            theme_classic() +
+            ggtitle('Per-gene total UMI: CellBender vs raw (CellBender barcodes only)') +
+            xlab('Raw total UMI per gene (+1, log10)') +
+            ylab('CellBender total UMI per gene (+1, log10)')
+        }
+      }
+    }
+  }
 }
 ```
 
