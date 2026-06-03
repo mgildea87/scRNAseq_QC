@@ -473,7 +473,7 @@ if (!is.null(ambient_peak) && nrow(ambient_peak) == 1) {
              fill = 'white')
 }
 
-rank_plot / slope_plot + plot_layout(heights = c(2, 2))
+rank_plot / slope_plot + plot_layout(heights = c(4, 4))
 
 # Show a second rank plot only when --use_cellbender TRUE was requested.
 is_cellbender_input <- isTRUE(params$use_cellbender)

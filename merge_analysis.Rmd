@@ -29,24 +29,24 @@ output:
 </style>
 
 Print the knit timestamp and R version for run provenance.
-```{r}
+```{r session-info}
 time <- Sys.time()
 print(paste('This notebook was knit on:', time))
 print(version)
 ```
 
 Display the current working directory used during report execution.
-```{r}
+```{r working-directory}
 cat(paste('Bigpurple Location: ',getwd()))
 ```
 
 List conda-installed packages to capture environment details.
-```{r}
+```{r conda-package-list}
 system('conda list')
 ```
 
 Load all required libraries used by downstream analysis chunks.
-```{r, message=F, warning=F}
+```{r load-libraries, message=F, warning=F}
 library(Seurat)
 library(ggplot2)
 library(CVRCFunc)
@@ -56,7 +56,7 @@ library(grid)
 ```
 
 Initialize chunk-level progress logging so the run records which code block starts executing.
-```{r, include=FALSE}
+```{r chunk-progress-logging, include=FALSE}
 chunk_log_dir <- 'chunk_logs'
 dir.create(chunk_log_dir, showWarnings = FALSE, recursive = TRUE)
 progress_log <- file.path(normalizePath(chunk_log_dir, mustWork = FALSE), 'chunk_progress_merged.log')
@@ -107,7 +107,7 @@ find_qc_support_file <- function(candidates) {
 
 # load merged object
 Load the merged Seurat object, harmonize metadata, detect species, and build RNA/SCT reductions if missing.
-```{r, warning=F, message=F}
+```{r load-merged-object, warning=F, message=F}
 merged_path <- 'merged_QC.rds'
 if (!file.exists(merged_path)) {
   stop('Could not find merged object: merged_QC.rds')
@@ -187,7 +187,7 @@ saveRDS(seurat, file = 'merged_QC.rds')
 
 # Dim reduction plots
 Visualize log-normalization and SCT embeddings colored and split by batch and sample name.
-```{r, fig.height=7, fig.width=10, message=FALSE, warning=F}
+```{r dim-reduction-plots, fig.height=7, fig.width=10, message=FALSE, warning=F}
 for (id_col in c('batch', 'sample_name')) {
   if (id_col %in% colnames(seurat@meta.data)) {
     Idents(seurat) <- id_col
@@ -207,7 +207,7 @@ print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', group.by = 'seurat_clusters
 # Abundance
 
 Plot per-sample and per-batch cluster abundance distributions for RNA and SCT cluster assignments.
-```{r, fig.height=6, fig.width=16, message=F, warning=FALSE}
+```{r abundance-plots, fig.height=6, fig.width=16, message=F, warning=FALSE}
 plot_abundance <- function(cluster_col, method_label) {
   prop_sample <- as.data.frame(prop.table(table(seurat$sample_name, seurat[[cluster_col]][, 1]), margin = 1))
   sample_batch <- unique(seurat@meta.data[, c('sample_name', 'batch')])
@@ -249,7 +249,7 @@ Compute LISI (Local Inverse Simpson's Index) scores from RNA and SCT PCA spaces 
 LISI quantifies local neighborhood diversity for metadata labels (here: batch and sample_name) around each cell.
 Higher LISI means stronger local mixing across label groups (typically less batch/sample separation), while lower LISI means neighborhoods are dominated by fewer labels (stronger separation).
 In practice, consistently low batch-LISI with clear batch-segregated embeddings suggests technical batch effects and supports trying integration, while moderate/high batch-LISI with biologically coherent clustering suggests integration may be unnecessary.
-```{r, warning=F, message=F}
+```{r compute-lisi, warning=F, message=F}
 pca_rna <- seurat@reductions$PCA_RNA_merged@cell.embeddings
 pca_sct <- seurat@reductions$PCA_SCT_merged@cell.embeddings
 lisi <- list(
@@ -262,7 +262,7 @@ saveRDS(lisi, file = 'lisi.rds')
 Load or recompute LISI, then visualize distributions and embedding-level patterns for both methods.
 Histograms show the global spread of mixing scores; FeaturePlot overlays reveal where mixing is high or low in UMAP space; violin plots summarize per-cell score distributions for each label type.
 Use these plots to compare RNA vs SCT normalization in terms of local batch/sample mixing behavior.
-```{r, fig.height=5, fig.width=7, warning=F, message=F}
+```{r lisi-visualizations, fig.height=5, fig.width=7, warning=F, message=F}
 if (file.exists('lisi.rds')) {
   lisi <- readRDS('lisi.rds')
 } else {
@@ -294,14 +294,14 @@ for (method in c('RNA', 'SCT')) {
 Compare key QC metrics across log-normalization and SCT-based cluster identities.
 
 ## log-norm clusters
-```{r, fig.height=10, fig.width=20, warning=F, message=F}
+```{r qc-lognorm-violin, fig.height=10, fig.width=20, warning=F, message=F}
 qc_features <- c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score')
 
 VlnPlot(seurat, features = qc_features,
         group.by = 'seurat_clusters_merged', pt.size = 0) + NoLegend()
 ```
 
-```{r, fig.height=5, fig.width=7, warning=F, message=F}
+```{r qc-lognorm-featureplots, fig.height=5, fig.width=7, warning=F, message=F}
 for (feature_name in qc_features) {
   if (!(feature_name %in% colnames(seurat@meta.data))) {
     message('Skipping missing QC metric: ', feature_name)
@@ -319,14 +319,14 @@ for (feature_name in qc_features) {
 ```
 
 ## SCT clusters
-```{r, fig.height=10, fig.width=20, warning=F, message=F}
+```{r qc-sct-violin, fig.height=10, fig.width=20, warning=F, message=F}
 qc_features <- c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score')
 
 VlnPlot(seurat, features = qc_features,
         group.by = 'seurat_clusters_sct_merged', pt.size = 0) + NoLegend()
 ```
 
-```{r, fig.height=5, fig.width=7, warning=F, message=F}
+```{r qc-sct-featureplots, fig.height=5, fig.width=7, warning=F, message=F}
 for (feature_name in qc_features) {
   if (!(feature_name %in% colnames(seurat@meta.data))) {
     message('Skipping missing QC metric: ', feature_name)
@@ -346,14 +346,14 @@ for (feature_name in qc_features) {
 
 # Differential expression (cluster markers)
 Run pseudobulk-style cluster marker discovery for log-norm and SCT cluster labels.
-```{r, warning=F, message=F}
+```{r differential-expression-markers, warning=F, message=F}
 FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_log_norm')
 FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_sct_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
 ```
 
 ## Top marker heatmap log-norm
 Build heatmaps of top markers from log-norm and SCT marker result tables.
-```{r, fig.height=30, fig.width=7, warning=F, message=F}
+```{r top-marker-heatmap, fig.height=30, fig.width=7, warning=F, message=F}
 plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
   if (!file.exists(marker_csv)) {
     message('Skipping marker heatmap: ', marker_csv, ' not found.')
@@ -378,7 +378,7 @@ mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'se
 ```
 
 Annotate marker heatmaps by labeling transcription factor genes when reference files are available.
-```{r, fig.height=10, fig.width=7, warning=F, message=F}
+```{r tf-labeled-heatmap, fig.height=10, fig.width=7, warning=F, message=F}
 add_tf_labels <- function(mat, label_text) {
   if (is.null(mat)) {
     message('Skipping TF-labeled heatmap: marker matrix not available for ', label_text)
@@ -510,7 +510,7 @@ add_tf_labels(mat_sct, 'SCT')
 # Doublets
 Visualize merged doublet annotations on both RNA and SCT UMAPs and summarize doublet-class composition across log-norm and SCT clusters.
 
-```{r, fig.height=7, fig.width=10, warning=F, message=F}
+```{r doublet-umap-highlights, fig.height=7, fig.width=10, warning=F, message=F}
 if ('doublet_class' %in% colnames(seurat@meta.data)) {
   doublet_cells <- rownames(seurat@meta.data)[tolower(as.character(seurat$doublet_class)) == 'doublet']
 
@@ -544,7 +544,7 @@ if ('doublet_class' %in% colnames(seurat@meta.data)) {
 }
 ```
 
-```{r, fig.height=6, fig.width=14, warning=F, message=F}
+```{r doublet-frequency-by-cluster, fig.height=6, fig.width=14, warning=F, message=F}
 plot_doublet_frequency <- function(cluster_col, reduction_label) {
   required_cols <- c(cluster_col, 'doublet_class')
   if (!all(required_cols %in% colnames(seurat@meta.data))) {
