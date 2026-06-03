@@ -46,18 +46,106 @@ USE_CELLBENDER="FALSE"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --sample_sheet) SAMPLE_SHEET="$2"; shift 2 ;;
-    --output_dir)   OUTPUT_DIR="$2";   shift 2 ;;
-    --outs_subdir)  OUTS_SUBDIR="$2";  shift 2 ;;
-    --mem)          MEM_GB="$2";       shift 2 ;;
-    --merge_mem)    MERGE_MEM_GB="$2"; shift 2 ;;
-    --integration_mem) INTEGRATION_MEM_GB="$2"; shift 2 ;;
-    --time)         WALL_TIME="$2";    shift 2 ;;
-    --skip_merge)   SKIP_MERGE="$2";   shift 2 ;;
-    --run_integration) RUN_INTEGRATION="$2"; shift 2 ;;
-    --integration_level) INTEGRATION_LEVEL="$2"; shift 2 ;;
-    --integration_only) INTEGRATION_ONLY="$2"; shift 2 ;;
-    --use_cellbender) USE_CELLBENDER="$2"; shift 2 ;;
+    --help|-h)
+      sed -n '1,26p' "$0" # prints header block lines
+      exit 0
+      ;;
+    --sample_sheet)
+      SAMPLE_SHEET="${2-}"
+      if [[ -z "${SAMPLE_SHEET}" || "${SAMPLE_SHEET}" == --* ]]; then
+        echo "ERROR: --sample_sheet requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --output_dir)
+      OUTPUT_DIR="${2-}"
+      if [[ -z "${OUTPUT_DIR}" || "${OUTPUT_DIR}" == --* ]]; then
+        echo "ERROR: --output_dir requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --outs_subdir)
+      OUTS_SUBDIR="${2-}"
+      if [[ -z "${OUTS_SUBDIR}" || "${OUTS_SUBDIR}" == --* ]]; then
+        echo "ERROR: --outs_subdir requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --mem)
+      MEM_GB="${2-}"
+      if [[ -z "${MEM_GB}" || "${MEM_GB}" == --* ]]; then
+        echo "ERROR: --mem requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --merge_mem)
+      MERGE_MEM_GB="${2-}"
+      if [[ -z "${MERGE_MEM_GB}" || "${MERGE_MEM_GB}" == --* ]]; then
+        echo "ERROR: --merge_mem requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --integration_mem)
+      INTEGRATION_MEM_GB="${2-}"
+      if [[ -z "${INTEGRATION_MEM_GB}" || "${INTEGRATION_MEM_GB}" == --* ]]; then
+        echo "ERROR: --integration_mem requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --time)
+      WALL_TIME="${2-}"
+      if [[ -z "${WALL_TIME}" || "${WALL_TIME}" == --* ]]; then
+        echo "ERROR: --time requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --skip_merge)
+      SKIP_MERGE="${2-}"
+      if [[ -z "${SKIP_MERGE}" || "${SKIP_MERGE}" == --* ]]; then
+        echo "ERROR: --skip_merge must be TRUE or FALSE." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --run_integration)
+      RUN_INTEGRATION="${2-}"
+      if [[ -z "${RUN_INTEGRATION}" || "${RUN_INTEGRATION}" == --* ]]; then
+        echo "ERROR: --run_integration must be TRUE or FALSE." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --integration_level)
+      INTEGRATION_LEVEL="${2-}"
+      if [[ -z "${INTEGRATION_LEVEL}" || "${INTEGRATION_LEVEL}" == --* ]]; then
+        echo "ERROR: --integration_level requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --integration_only)
+      INTEGRATION_ONLY="${2-}"
+      if [[ -z "${INTEGRATION_ONLY}" || "${INTEGRATION_ONLY}" == --* ]]; then
+        echo "ERROR: --integration_only must be TRUE or FALSE." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --use_cellbender)
+      USE_CELLBENDER="${2-}"
+      if [[ -z "${USE_CELLBENDER}" || "${USE_CELLBENDER}" == --* ]]; then
+        echo "ERROR: --use_cellbender must be TRUE or FALSE." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done

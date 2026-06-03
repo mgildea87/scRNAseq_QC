@@ -256,21 +256,237 @@ cat('RBC genes detected:', length(rbc_features), '\n')
 ```
 
 # Barcode rank plots
-Horizontal red line marks the UMI threshold determined by CellRanger that separates putative cells from empty droplets.
+Horizontal red line marks the UMI threshold determined by CellRanger that separates putative cells from empty droplets. If cellbender was used, the horizontal line corresponds to the minimum non-zero UMI barcode.
+The second panel shows a moving local slope of the log-rank vs log-UMI curve and labels an ambient-peak candidate in the empty-droplet tail. This is still in development.
+If the filtered input appears to be a CellBender output, an additional barcode rank panel is generated from that filtered matrix.
 
-```{r barcode-rank-plot}
+```{r barcode-rank-plot, fig.width=11, fig.height=9}
 # Rank all barcodes by descending UMI count and plot the knee curve;
 # the CellRanger cell/empty threshold is shown as a horizontal red line
-bc_rank_data          <- data.frame(UMI_counts = Matrix::colSums(raw_matrix))
+# and a moving local slope is used to highlight the ambient RNA shelf
+bc_rank_data          <- data.frame(UMI_counts = as.numeric(Matrix::colSums(raw_matrix)))
 bc_rank_data          <- arrange(bc_rank_data, desc(UMI_counts))
 bc_rank_data$rank     <- seq_len(nrow(bc_rank_data))
-cellranger_threshold  <- log10(min(Matrix::colSums(seurat)))
+filtered_col_sums     <- as.numeric(Matrix::colSums(seurat))
+positive_filtered     <- filtered_col_sums[is.finite(filtered_col_sums) & filtered_col_sums > 0]
+if (length(positive_filtered) > 0) {
+  cellranger_count_thr <- min(positive_filtered)
+  cellranger_threshold <- log10(cellranger_count_thr)
+} else {
+  cellranger_count_thr <- NA_real_
+  cellranger_threshold <- NA_real_
+  cat('No positive filtered-barcode UMI totals were found; skipping CellRanger threshold lines.\n')
+}
 
-ggplot(bc_rank_data, aes(x = log10(rank), y = log10(UMI_counts))) +
+bc_rank_data$log_rank <- log10(bc_rank_data$rank)
+bc_rank_data$log_umi  <- log10(pmax(bc_rank_data$UMI_counts, 1))
+x_limits <- range(bc_rank_data$log_rank, finite = TRUE)
+
+# Rolling local slope d(log10(UMI))/d(log10(rank)) using a centered window.
+# Use a vectorized centered finite difference rather than fitting one linear
+# model per barcode, which is slow on large raw matrices.
+n_bc <- nrow(bc_rank_data)
+slope_window <- max(101, as.integer(0.01 * n_bc))
+if (slope_window %% 2 == 0) slope_window <- slope_window + 1
+slope_window <- min(slope_window, n_bc - (1 - n_bc %% 2))
+
+moving_slope <- rep(NA_real_, n_bc)
+half_w <- (slope_window - 1) / 2
+if (n_bc >= slope_window) {
+  center_idx <- seq_len(n_bc)
+  left_idx <- pmax(center_idx - half_w, 1)
+  right_idx <- pmin(center_idx + half_w, n_bc)
+  valid_span <- right_idx > left_idx
+  moving_slope[valid_span] <-
+    (bc_rank_data$log_umi[right_idx[valid_span]] - bc_rank_data$log_umi[left_idx[valid_span]]) /
+    (bc_rank_data$log_rank[right_idx[valid_span]] - bc_rank_data$log_rank[left_idx[valid_span]])
+}
+bc_rank_data$moving_slope <- moving_slope
+
+if (is.finite(cellranger_count_thr)) {
+  threshold_candidates <- which(bc_rank_data$UMI_counts >= cellranger_count_thr)
+  threshold_rank <- if (length(threshold_candidates) > 0) max(threshold_candidates) else NA_real_
+  threshold_rank_log <- if (is.finite(threshold_rank) && threshold_rank > 0) log10(threshold_rank) else NA_real_
+} else {
+  threshold_rank <- NA_real_
+  threshold_rank_log <- NA_real_
+}
+
+valid_slope <- bc_rank_data %>%
+  filter(UMI_counts > 0,
+         !is.na(moving_slope)) %>%
+  arrange(rank)
+
+ambient_peak <- NULL
+first_drop_rank <- NA_real_
+second_drop_rank <- NA_real_
+ambient_shelf <- NULL
+average_ambient_rna_umi <- NA_real_
+
+# Ambient shelf rule: moving from low rank to high rank, find the first two
+# local minima in slope and identify the shelf between them.
+if (nrow(valid_slope) > 20) {
+  slope_vals <- valid_slope$moving_slope
+  if (length(slope_vals) >= 7) {
+    smooth_k <- max(11L, as.integer(0.005 * length(slope_vals)))
+    if (smooth_k %% 2 == 0) smooth_k <- smooth_k + 1L
+    smooth_k <- min(smooth_k, length(slope_vals) - (1L - length(slope_vals) %% 2L))
+    if (smooth_k >= 3) {
+      slope_smooth <- as.numeric(stats::filter(
+        slope_vals,
+        filter = rep(1 / smooth_k, smooth_k),
+        sides = 2,
+        method = 'convolution'
+      ))
+    } else {
+      slope_smooth <- slope_vals
+    }
+  } else {
+    slope_smooth <- slope_vals
+  }
+
+  finite_idx <- which(is.finite(slope_smooth))
+  if (length(finite_idx) >= 3) {
+    slope_finite <- slope_smooth[finite_idx]
+    local_min_finite_idx <- which(
+      slope_finite[2:(length(slope_finite) - 1)] <= slope_finite[1:(length(slope_finite) - 2)] &
+      slope_finite[2:(length(slope_finite) - 1)] <= slope_finite[3:length(slope_finite)]
+    ) + 1
+
+    if (length(local_min_finite_idx) >= 2) {
+      local_min_idx <- finite_idx[local_min_finite_idx]
+      deep_cutoff <- as.numeric(quantile(slope_finite, probs = 0.20, names = FALSE))
+      deep_min_idx <- local_min_idx[slope_smooth[local_min_idx] <= deep_cutoff]
+
+      selected_min_idx <- if (length(deep_min_idx) >= 2) {
+        deep_min_idx
+      } else {
+        local_min_idx[order(slope_smooth[local_min_idx])[seq_len(min(2, length(local_min_idx)))]]
+      }
+
+      if (length(selected_min_idx) >= 2) {
+        selected_min_idx <- sort(selected_min_idx)
+        first_drop_rank <- valid_slope$rank[selected_min_idx[1]]
+        second_drop_rank <- valid_slope$rank[selected_min_idx[2]]
+
+        shelf_candidates <- valid_slope[
+          valid_slope$rank > first_drop_rank & valid_slope$rank < second_drop_rank,
+          , drop = FALSE
+        ]
+
+        if (nrow(shelf_candidates) > 0) {
+          ambient_shelf <- shelf_candidates
+          average_ambient_rna_umi <- mean(ambient_shelf$UMI_counts, na.rm = TRUE)
+          best_idx <- which.min(abs(shelf_candidates$moving_slope))
+          ambient_peak <- shelf_candidates[best_idx, , drop = FALSE]
+        }
+      }
+    }
+  }
+}
+
+# Fallback: if shelf boundaries are not found, choose the closest-to-zero slope
+# in the empty-droplet region when available.
+if (is.null(ambient_peak) && nrow(valid_slope) > 0) {
+  fallback_set <- valid_slope
+  if (is.finite(cellranger_count_thr)) {
+    fallback_set <- valid_slope[valid_slope$UMI_counts <= cellranger_count_thr, , drop = FALSE]
+  }
+  if (nrow(fallback_set) > 0) {
+    ambient_shelf <- fallback_set
+    average_ambient_rna_umi <- mean(ambient_shelf$UMI_counts, na.rm = TRUE)
+    best_idx <- which.min(abs(fallback_set$moving_slope))
+    ambient_peak <- fallback_set[best_idx, , drop = FALSE]
+  }
+}
+
+if (is.finite(average_ambient_rna_umi)) {
+  cat('Average ambient RNA UMI (ambient shelf mean):', signif(average_ambient_rna_umi, 4),
+      'across', nrow(ambient_shelf), 'barcodes\n')
+}
+
+first_drop_rank_log <- if (is.finite(first_drop_rank) && first_drop_rank > 0) log10(first_drop_rank) else NA_real_
+second_drop_rank_log <- if (is.finite(second_drop_rank) && second_drop_rank > 0) log10(second_drop_rank) else NA_real_
+
+rank_plot <- ggplot(bc_rank_data, aes(x = log_rank, y = log_umi)) +
   geom_point(color = 'navy') +
   ggtitle('Barcode rank plot – RNA') +
   theme_classic() +
-  geom_hline(yintercept = cellranger_threshold, color = 'firebrick')
+  scale_x_continuous(limits = x_limits) +
+  ylab('log10(UMI counts)') +
+  xlab('log10(barcode rank)')
+
+slope_plot <- ggplot(bc_rank_data, aes(x = log_rank, y = moving_slope)) +
+  geom_line(color = 'darkgreen', linewidth = 0.4, na.rm = TRUE) +
+  theme_classic() +
+  ggtitle('Moving local slope of barcode rank curve') +
+  labs(subtitle = 'Ambient shelf: between first two deep local minima of smoothed slope') +
+  scale_x_continuous(limits = x_limits) +
+  ylab('Local slope') +
+  xlab('log10(barcode rank)')
+
+if (is.finite(threshold_rank_log)) {
+  slope_plot <- slope_plot +
+    geom_vline(xintercept = threshold_rank_log, color = 'firebrick', linetype = 'dashed')
+}
+
+if (is.finite(first_drop_rank_log)) {
+  slope_plot <- slope_plot +
+    geom_vline(xintercept = first_drop_rank_log, color = 'steelblue4', linetype = 'dotted')
+}
+
+if (is.finite(second_drop_rank_log)) {
+  slope_plot <- slope_plot +
+    geom_vline(xintercept = second_drop_rank_log, color = 'steelblue4', linetype = 'dotted')
+}
+
+if (!is.null(ambient_peak) && nrow(ambient_peak) == 1) {
+  slope_plot <- slope_plot +
+    geom_point(data = ambient_peak,
+               aes(x = log_rank, y = moving_slope),
+               color = 'orange3', size = 2.2, inherit.aes = FALSE) +
+    geom_vline(xintercept = ambient_peak$log_rank,
+               color = 'orange3', linetype = 'dotdash') +
+    annotate('label',
+             x = ambient_peak$log_rank,
+             y = ambient_peak$moving_slope,
+             label = paste0('ambient shelf candidate\nrank=', ambient_peak$rank,
+                            ', UMI=', ambient_peak$UMI_counts,
+                            '\navg ambient shelf UMI=', signif(average_ambient_rna_umi, 4)),
+             hjust = 1.05,
+             size = 3,
+             label.size = 0.2,
+             fill = 'white')
+}
+
+rank_plot / slope_plot + plot_layout(heights = c(2, 2))
+
+# Show a second rank plot only when filtered input looks like CellBender output.
+is_cellbender_input <- any(grepl('cellbender', c(params$filtered_path, filtered_loaded),
+                                 ignore.case = TRUE))
+if (is_cellbender_input) {
+  cb_rank_data <- data.frame(UMI_counts = as.numeric(Matrix::colSums(seurat)))
+  cb_rank_data <- arrange(cb_rank_data, desc(UMI_counts))
+  cb_rank_data$rank <- seq_len(nrow(cb_rank_data))
+  cb_rank_data$log_rank <- log10(cb_rank_data$rank)
+  cb_rank_data$log_umi <- log10(pmax(cb_rank_data$UMI_counts, 1))
+
+  cellbender_rank_plot <- ggplot(cb_rank_data, aes(x = log_rank, y = log_umi)) +
+    geom_point(color = 'purple4', alpha = 0.6, size = 0.7) +
+    theme_classic() +
+    ggtitle('Barcode rank plot – filtered input (CellBender)') +
+    xlab('log10(barcode rank)') +
+    ylab('log10(UMI counts)')
+
+  if (is.finite(cellranger_threshold)) {
+    cellbender_rank_plot <- cellbender_rank_plot +
+      geom_hline(yintercept = cellranger_threshold, color = 'firebrick')
+  }
+
+  cellbender_rank_plot
+} else {
+  cat('Skipping CellBender barcode rank panel (filtered input is not detected as CellBender output).\n')
+}
 ```
 
 # Filter for features present in at least 0.1% of cells

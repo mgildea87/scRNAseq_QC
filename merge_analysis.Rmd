@@ -294,17 +294,53 @@ for (method in c('RNA', 'SCT')) {
 Compare key QC metrics across log-normalization and SCT-based cluster identities.
 
 ## log-norm clusters
-```{r, fig.height=6, fig.width=12, warning=F, message=F}
-VlnPlot(seurat, features = c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score'),
-        group.by = 'seurat_clusters_merged', pt.size = 0) +
-  ggtitle('QC metrics by log-norm clusters') + NoLegend()
+```{r, fig.height=10, fig.width=20, warning=F, message=F}
+qc_features <- c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score')
+
+VlnPlot(seurat, features = qc_features,
+        group.by = 'seurat_clusters_merged', pt.size = 0) + NoLegend()
+```
+
+```{r, fig.height=5, fig.width=7, warning=F, message=F}
+for (feature_name in qc_features) {
+  if (!(feature_name %in% colnames(seurat@meta.data))) {
+    message('Skipping missing QC metric: ', feature_name)
+    next
+  }
+
+  print(
+    FeaturePlot(seurat,
+                features = feature_name,
+                reduction = 'UMAP_RNA_merged',
+                raster = F) +
+      ggtitle(paste('log-norm UMAP -', feature_name))
+  )
+}
 ```
 
 ## SCT clusters
-```{r, fig.height=6, fig.width=12, warning=F, message=F}
-VlnPlot(seurat, features = c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score'),
-        group.by = 'seurat_clusters_sct_merged', pt.size = 0) +
-  ggtitle('QC metrics by SCT clusters') + NoLegend()
+```{r, fig.height=10, fig.width=20, warning=F, message=F}
+qc_features <- c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score')
+
+VlnPlot(seurat, features = qc_features,
+        group.by = 'seurat_clusters_sct_merged', pt.size = 0) + NoLegend()
+```
+
+```{r, fig.height=5, fig.width=7, warning=F, message=F}
+for (feature_name in qc_features) {
+  if (!(feature_name %in% colnames(seurat@meta.data))) {
+    message('Skipping missing QC metric: ', feature_name)
+    next
+  }
+
+  print(
+    FeaturePlot(seurat,
+                features = feature_name,
+                reduction = 'UMAP_SCT_merged',
+                raster = F) +
+      ggtitle(paste('SCT UMAP -', feature_name))
+  )
+}
 ```
 
 
@@ -317,7 +353,7 @@ FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_sct_merged', sample_ident 
 
 ## Top marker heatmap log-norm
 Build heatmaps of top markers from log-norm and SCT marker result tables.
-```{r, fig.height=30, fig.width=5, warning=F, message=F}
+```{r, fig.height=30, fig.width=7, warning=F, message=F}
 plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
   if (!file.exists(marker_csv)) {
     message('Skipping marker heatmap: ', marker_csv, ' not found.')
@@ -342,7 +378,7 @@ mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'se
 ```
 
 Annotate marker heatmaps by labeling transcription factor genes when reference files are available.
-```{r, fig.height=10, fig.width=5, warning=F, message=F}
+```{r, fig.height=10, fig.width=7, warning=F, message=F}
 add_tf_labels <- function(mat, label_text) {
   if (is.null(mat)) {
     message('Skipping TF-labeled heatmap: marker matrix not available for ', label_text)
