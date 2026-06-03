@@ -407,6 +407,9 @@ if (is.finite(average_ambient_rna_umi)) {
 
 first_drop_rank_log <- if (is.finite(first_drop_rank) && first_drop_rank > 0) log10(first_drop_rank) else NA_real_
 second_drop_rank_log <- if (is.finite(second_drop_rank) && second_drop_rank > 0) log10(second_drop_rank) else NA_real_
+slope_limits <- range(bc_rank_data$moving_slope, finite = TRUE)
+slope_span <- diff(slope_limits)
+if (!is.finite(slope_span) || slope_span <= 0) slope_span <- 1
 
 rank_plot <- ggplot(bc_rank_data, aes(x = log_rank, y = log_umi)) +
   geom_point(color = 'navy') +
@@ -441,6 +444,10 @@ if (is.finite(second_drop_rank_log)) {
 }
 
 if (!is.null(ambient_peak) && nrow(ambient_peak) == 1) {
+  ambient_label_y <- ambient_peak$moving_slope - (0.12 * slope_span)
+  ambient_label_y <- max(slope_limits[1] + (0.08 * slope_span), ambient_label_y)
+  ambient_label_y <- min(slope_limits[2] - (0.10 * slope_span), ambient_label_y)
+
   slope_plot <- slope_plot +
     geom_point(data = ambient_peak,
                aes(x = log_rank, y = moving_slope),
@@ -449,7 +456,7 @@ if (!is.null(ambient_peak) && nrow(ambient_peak) == 1) {
                color = 'orange3', linetype = 'dotdash') +
     annotate('label',
              x = ambient_peak$log_rank,
-             y = ambient_peak$moving_slope,
+             y = ambient_label_y,
              label = paste0('ambient shelf candidate\nrank=', ambient_peak$rank,
                             ', UMI=', ambient_peak$UMI_counts,
                             '\navg ambient shelf UMI=', signif(average_ambient_rna_umi, 4)),

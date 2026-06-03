@@ -506,3 +506,68 @@ add_tf_labels <- function(mat, label_text) {
 add_tf_labels(mat_rna, 'log-norm')
 add_tf_labels(mat_sct, 'SCT')
 ```
+
+# Doublets
+Visualize merged doublet annotations on both RNA and SCT UMAPs and summarize doublet-class composition across log-norm and SCT clusters.
+
+```{r, fig.height=7, fig.width=10, warning=F, message=F}
+if ('doublet_class' %in% colnames(seurat@meta.data)) {
+  doublet_cells <- rownames(seurat@meta.data)[tolower(as.character(seurat$doublet_class)) == 'doublet']
+
+  if (!length(doublet_cells)) {
+    message('Skipping doublet highlight UMAPs: no cells labeled as doublet were found.')
+  } else {
+  print(
+    DimPlot(seurat,
+            reduction = 'UMAP_RNA_merged',
+              cells.highlight = doublet_cells,
+              cols = 'grey80',
+              cols.highlight = 'firebrick',
+              sizes.highlight = 0.6,
+            raster = F) +
+        ggtitle('log-norm UMAP highlighting doublets')
+  )
+
+  print(
+    DimPlot(seurat,
+            reduction = 'UMAP_SCT_merged',
+              cells.highlight = doublet_cells,
+              cols = 'grey80',
+              cols.highlight = 'firebrick',
+              sizes.highlight = 0.6,
+            raster = F) +
+        ggtitle('SCT UMAP highlighting doublets')
+  )
+  }
+} else {
+  message('Skipping doublet class UMAPs: doublet_class metadata not found.')
+}
+```
+
+```{r, fig.height=6, fig.width=14, warning=F, message=F}
+plot_doublet_frequency <- function(cluster_col, reduction_label) {
+  required_cols <- c(cluster_col, 'doublet_class')
+  if (!all(required_cols %in% colnames(seurat@meta.data))) {
+    message('Skipping ', reduction_label, ' doublet frequency plot: missing metadata columns.')
+    return(invisible(NULL))
+  }
+
+  doublet_freq <- as.data.frame(prop.table(table(seurat[[cluster_col]][, 1], seurat$doublet_class), margin = 1))
+  colnames(doublet_freq) <- c('cluster', 'doublet_class', 'frequency')
+
+  print(
+    ggplot(doublet_freq, aes(x = cluster, y = frequency, fill = doublet_class)) +
+      geom_col(position = 'stack') +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1)) +
+      ylab('Fraction of cells') +
+      xlab('Cluster') +
+      ggtitle(paste('Doublet class frequency by', reduction_label, 'clusters'))
+  )
+
+  invisible(doublet_freq)
+}
+
+plot_doublet_frequency('seurat_clusters_merged', 'log-norm')
+plot_doublet_frequency('seurat_clusters_sct_merged', 'SCT')
+```
