@@ -17,6 +17,7 @@
 #   --merge_mem   <GB>    memory for merge job in GB         (default: 64)
 #   --integration_mem <GB> memory for integration job in GB   (default: 64)
 #   --time        <HH:MM> wall time per job                 (default: 2:00:00)
+#   --merge_only  <TRUE/FALSE> skip per-sample QC and run merge_analysis from existing sample RDS files (default: FALSE)
 #   --skip_merge  <TRUE/FALSE> skip submitting merge job     (default: FALSE)
 #   --run_integration <TRUE/FALSE> render integrate_RNA.Rmd after merge (default: FALSE)
 #   --integration_level <Batch|Sample> required when integration runs
@@ -38,6 +39,7 @@ MEM_GB=32
 MERGE_MEM_GB=64
 INTEGRATION_MEM_GB=64
 WALL_TIME="2:00:00"
+MERGE_ONLY="FALSE"
 SKIP_MERGE="FALSE"
 RUN_INTEGRATION="FALSE"
 INTEGRATION_LEVEL=""
@@ -102,6 +104,14 @@ while [[ $# -gt 0 ]]; do
       WALL_TIME="${2-}"
       if [[ -z "${WALL_TIME}" || "${WALL_TIME}" == --* ]]; then
         echo "ERROR: --time requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --merge_only)
+      MERGE_ONLY="${2-}"
+      if [[ -z "${MERGE_ONLY}" || "${MERGE_ONLY}" == --* ]]; then
+        echo "ERROR: --merge_only must be TRUE or FALSE." >&2
         exit 1
       fi
       shift 2
@@ -184,6 +194,16 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
   RUN_INTEGRATION="TRUE"
 fi
 
+MERGE_ONLY_LOWER="$(echo "${MERGE_ONLY}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${MERGE_ONLY_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
+  MERGE_ONLY="TRUE"
+elif [[ "${MERGE_ONLY_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
+  MERGE_ONLY="FALSE"
+else
+  echo "ERROR: --merge_only must be TRUE or FALSE." >&2
+  exit 1
+fi
+
 USE_CELLBENDER_LOWER="$(echo "${USE_CELLBENDER}" | tr '[:upper:]' '[:lower:]')"
 if [[ "${USE_CELLBENDER_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
   USE_CELLBENDER="TRUE"
@@ -208,6 +228,16 @@ fi
 
 if [[ "${SKIP_MERGE}" == "TRUE" && "${RUN_INTEGRATION}" == "TRUE" && "${INTEGRATION_ONLY}" != "TRUE" ]]; then
   echo "ERROR: --run_integration TRUE requires merge; do not combine with --skip_merge TRUE." >&2
+  exit 1
+fi
+
+if [[ "${MERGE_ONLY}" == "TRUE" && "${INTEGRATION_ONLY}" == "TRUE" ]]; then
+  echo "ERROR: --merge_only and --integration_only are mutually exclusive." >&2
+  exit 1
+fi
+
+if [[ "${MERGE_ONLY}" == "TRUE" && "${SKIP_MERGE}" == "TRUE" ]]; then
+  echo "ERROR: --merge_only cannot be combined with --skip_merge TRUE." >&2
   exit 1
 fi
 
@@ -240,7 +270,7 @@ fi
 echo "Submitting ${#SAMPLES[@]} job(s)..."
 echo "  Sample sheet : ${SAMPLE_SHEET}"
 echo "  Output dir   : ${OUTPUT_DIR}"
-echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}"
+echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Merge only: ${MERGE_ONLY}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}"
 echo "----------------------------------------------"
 
 if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
@@ -273,6 +303,41 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
         --use_cellbender \"${USE_CELLBENDER}\"
     ")
   echo "  Submitted: integration-only job  (job ${INTEGRATE_JOB_ID})"
+  echo "----------------------------------------------"
+  echo "All jobs submitted. Monitor with: squeue -u \$USER"
+  exit 0
+fi
+
+if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
+  MERGE_ONLY_JOB_ID=$(sbatch \
+    --job-name="QC_merge_only" \
+    --partition=cpu_short \
+    --ntasks=1 \
+    --cpus-per-task=1 \
+    --mem="${MERGE_MEM_GB}G" \
+    --time="${WALL_TIME}" \
+    --output="${OUTPUT_DIR}/logs/QC_merge_only_%j.log" \
+    --error="${OUTPUT_DIR}/logs/QC_merge_only_%j.log" \
+    --parsable \
+    --wrap="
+      set -euo pipefail
+      set +u
+      source \"${CONDA_INIT}\"
+      set -u
+      echo \"Job ID   : \${SLURM_JOB_ID}\"
+      echo \"Node     : \${SLURMD_NODENAME}\"
+      echo \"Task     : merge only\"
+      echo \"Start    : \$(date)\"
+      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
+        --sample_sheet \"${SAMPLE_SHEET}\" \
+        --output_dir   \"${OUTPUT_DIR}\" \
+        --outs_subdir  \"${OUTS_SUBDIR}\" \
+        --merge_only   TRUE \
+        --run_integration \"${RUN_INTEGRATION}\" \
+        --integration_level \"${INTEGRATION_LEVEL}\"
+      echo \"Finished : \$(date)\"
+    ")
+  echo "  Submitted: merge-only job  (job ${MERGE_ONLY_JOB_ID})"
   echo "----------------------------------------------"
   echo "All jobs submitted. Monitor with: squeue -u \$USER"
   exit 0

@@ -208,8 +208,14 @@ bash /path/to/templates/QC/submit_QC_batch.sh \
 For sample sheets with more than one sample, this mode submits a dependent
 merge job by default. To skip that merge job, pass `--skip_merge TRUE`.
 
+To skip all per-sample QC jobs and run only merge/report generation from
+existing `<sample_name>_QC.rds` files, pass `--merge_only TRUE`.
+
 To run the optional integration report after merge in the merge job, pass
 `--run_integration TRUE --integration_level Batch` (or `Sample`).
+
+This also works with `--merge_only TRUE`: integration will run after merge,
+but only when merge succeeds and the sample sheet contains at least 2 samples.
 
 To run only the integration stage on an existing merged object, pass
 `--integration_only TRUE --integration_level Batch` (or `Sample`).
@@ -230,11 +236,27 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 | `--mem` | `32` | Memory per job in GB |
 | `--merge_mem` | `64` | Memory for the merge job in GB |
 | `--integration_mem` | `64` | Memory for the integration job in GB |
+| `--merge_only` | `FALSE` | Skip per-sample QC jobs and submit only merge/report generation from existing per-sample RDS files |
 | `--skip_merge` | `FALSE` | Skip the post-sample merge step (`merged_QC.rds` and `merge_analysis.html`) |
-| `--run_integration` | `FALSE` | Run optional post-merge integration report (`integrate_RNA.Rmd`) |
+| `--run_integration` | `FALSE` | Run optional post-merge integration report (`integrate_RNA.Rmd`); works with `--merge_only TRUE` after successful merge (requires at least 2 samples) |
 | `--integration_level` | *(required when integration runs)* | Integration grouping level: `Batch` or `Sample` |
 | `--integration_only` | `FALSE` | Skip sample QC and merge; run only `integrate_RNA.Rmd` using existing `merged_QC.rds` |
 | `--time` | `12:00:00` | Wall time per job — max on `cpu_short` is `12:00:00` |
+
+#### Flag compatibility
+
+Valid combinations:
+
+- `--merge_only TRUE --run_integration TRUE --integration_level Batch|Sample`: runs merge from existing per-sample RDS files, then runs integration if merge succeeds (requires at least 2 samples in the sample sheet).
+- `--merge_only TRUE`: runs merge/report generation only from existing per-sample RDS files.
+- `--integration_only TRUE --integration_level Batch|Sample`: skips sample QC and merge, runs integration from an existing `merged_QC.rds`.
+- `--skip_merge TRUE`: runs per-sample QC jobs only and does not submit a merge job.
+
+Invalid combinations:
+
+- `--merge_only TRUE --integration_only TRUE`: mutually exclusive.
+- `--merge_only TRUE --skip_merge TRUE`: mutually exclusive.
+- `--run_integration TRUE --skip_merge TRUE` (without `--integration_only TRUE`): integration requires merge.
 
 ```bash
 # Example: larger samples needing more memory
@@ -245,6 +267,14 @@ bash /path/to/submit_QC_batch.sh \
   --mem          32 \
   --merge_mem    96 \
   --integration_mem 128
+
+# Example: skip per-sample QC and run only merge_analysis/integration on existing sample RDS files
+bash /path/to/submit_QC_batch.sh \
+  --sample_sheet /abs/path/to/samples.csv \
+  --output_dir   /abs/path/to/results/QC \
+  --merge_only   TRUE \
+  --run_integration TRUE \
+  --integration_level Batch
 ```
 
 Monitor submitted jobs with `squeue -u $USER`.
