@@ -1188,6 +1188,145 @@ DimPlot(seurat, reduction = 'umap_sct', group.by = 'seurat_clusters_sct', label 
   ggtitle('UMAP (SCTransform normalisation)')
 ```
 
+# Graph modularity by normalisation method
+Computes weighted graph modularity for both RNA (log-normalized) and SCTransform SNN graphs using their respective cluster labels, then visualises pairwise modularity ratios with a heatmap and a cluster network where edge thickness scales with modularity ratio.
+
+The following description was pulled from the OCSA with bioconductor notebook:
+For graph-based clustering, the modularity is a natural metric for evaluating the separation between communities. This is defined as the (scaled) difference between the observed total weight of edges between nodes in the same cluster and the expected total weight if edge weights were randomly distributed across all pairs of nodes. Larger modularity values indicate that there most edges occur within clusters, suggesting that the clusters are sufficiently well separated to avoid edges forming between neighboring cells in different clusters.
+
+The standard approach is to report a single modularity value for a clustering on a given graph. This is useful for comparing different clusterings on the same graph - and indeed, some community detection algorithms are designed with the aim of maximizing the modularity - but it is less helpful for interpreting a given clustering. Rather, we use the pairwiseModularity() function from bluster with as.ratio=TRUE, which returns the ratio of the observed to expected sum of weights between each pair of clusters. We use the ratio instead of the difference as the former is less dependent on the number of cells in each cluster.
+
+```{r graph-modularity, fig.height=7, fig.width=9}
+if (!requireNamespace('bluster', quietly = TRUE)) {
+  stop('The bluster package is required for pairwiseModularity. Please install it before rendering.', call. = FALSE)
+}
+
+plot_method_modularity <- function(obj, graph_name, cluster_col, method_label) {
+  if (!graph_name %in% names(obj@graphs)) {
+    stop(graph_name, ' graph not found in seurat@graphs; cannot compute ', method_label, ' graph modularity.', call. = FALSE)
+  }
+
+  graph_mat <- obj@graphs[[graph_name]]
+  graph_mat <- Matrix::triu(graph_mat, k = 1)
+  edge_triplets <- summary(graph_mat)
+
+  edge_df <- data.frame(
+    from = colnames(graph_mat)[edge_triplets$i],
+    to = colnames(graph_mat)[edge_triplets$j],
+    weight = edge_triplets$x,
+    stringsAsFactors = FALSE
+  )
+
+  g <- igraph::graph_from_data_frame(
+    edge_df,
+    directed = FALSE,
+    vertices = colnames(graph_mat)
+  )
+
+  cluster_labels <- factor(as.character(obj[[cluster_col]][colnames(graph_mat), 1]))
+  if (any(is.na(cluster_labels))) {
+    stop('Missing ', method_label, ' cluster labels for one or more graph vertices.', call. = FALSE)
+  }
+
+  global_modularity <- igraph::modularity(
+    g,
+    membership = as.integer(cluster_labels),
+    weights = igraph::E(g)$weight
+  )
+  cat('Global weighted modularity (', graph_name, ', ', cluster_col, '): ', signif(global_modularity, 5), '\n', sep = '')
+
+  # Pairwise modularity ratios (>1 enriched connectivity, <1 depleted).
+  pair_mod_ratio <- bluster::pairwiseModularity(g, cluster_labels, as.ratio = TRUE)
+  pair_mod_ratio <- as.matrix(pair_mod_ratio)
+
+  heat_df <- as.data.frame(as.table(pair_mod_ratio), stringsAsFactors = FALSE)
+  colnames(heat_df) <- c('cluster1', 'cluster2', 'modularity_ratio')
+  heat_df$cluster1 <- factor(heat_df$cluster1, levels = sort(unique(heat_df$cluster1)))
+  heat_df$cluster2 <- factor(heat_df$cluster2, levels = sort(unique(heat_df$cluster2)))
+  heat_df$modularity_ratio_plot <- ifelse(
+    is.finite(heat_df$modularity_ratio) & heat_df$modularity_ratio > 0,
+    heat_df$modularity_ratio,
+    NA_real_
+  )
+
+  print(
+    ggplot(heat_df, aes(x = cluster1, y = cluster2, fill = modularity_ratio_plot)) +
+      geom_tile() +
+      scale_fill_viridis_c(option = 'magma', trans = 'log10', na.value = 'grey90') +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      xlab(paste(method_label, 'cluster')) +
+      ylab(paste(method_label, 'cluster')) +
+      ggtitle(paste('Pairwise modularity ratio heatmap (', method_label, ')', sep = ''))
+  )
+
+  # Cluster-level network: edge thickness scales with pairwise modularity ratio.
+  upper_idx <- which(upper.tri(pair_mod_ratio), arr.ind = TRUE)
+  net_edges <- data.frame(
+    from = rownames(pair_mod_ratio)[upper_idx[, 1]],
+    to = colnames(pair_mod_ratio)[upper_idx[, 2]],
+    modularity_ratio = pair_mod_ratio[upper_idx],
+    stringsAsFactors = FALSE
+  )
+  net_edges <- net_edges[is.finite(net_edges$modularity_ratio) & net_edges$modularity_ratio > 0, , drop = FALSE]
+
+  if (nrow(net_edges) > 0) {
+    cluster_nodes <- sort(unique(c(net_edges$from, net_edges$to)))
+    g_clusters <- igraph::graph_from_data_frame(
+      net_edges,
+      directed = FALSE,
+      vertices = data.frame(name = cluster_nodes, stringsAsFactors = FALSE)
+    )
+
+    lay <- igraph::layout_with_fr(g_clusters, weights = igraph::E(g_clusters)$modularity_ratio)
+    node_df <- data.frame(
+      cluster = igraph::V(g_clusters)$name,
+      x = lay[, 1],
+      y = lay[, 2],
+      stringsAsFactors = FALSE
+    )
+
+    e_tbl <- igraph::as_data_frame(g_clusters, what = 'edges')
+    e_tbl$x <- node_df$x[match(e_tbl$from, node_df$cluster)]
+    e_tbl$y <- node_df$y[match(e_tbl$from, node_df$cluster)]
+    e_tbl$xend <- node_df$x[match(e_tbl$to, node_df$cluster)]
+    e_tbl$yend <- node_df$y[match(e_tbl$to, node_df$cluster)]
+
+    print(
+      ggplot() +
+        geom_segment(
+          data = e_tbl,
+          aes(x = x, y = y, xend = xend, yend = yend,
+              size = modularity_ratio, color = modularity_ratio),
+          alpha = 0.8
+        ) +
+        geom_point(data = node_df, aes(x = x, y = y), color = 'black', size = 3) +
+        geom_text(data = node_df, aes(x = x, y = y, label = cluster), vjust = -1, size = 3) +
+        scale_color_viridis_c(option = 'plasma', name = 'Modularity ratio') +
+        scale_size_continuous(range = c(0.3, 4), name = 'Modularity ratio') +
+        theme_void() +
+        ggtitle(paste('Cluster network weighted by pairwise modularity ratio (', method_label, ')', sep = ''))
+    )
+  } else {
+    cat('No finite positive pairwise modularity ratios available for ', method_label, ' network plot.\n', sep = '')
+  }
+}
+
+plot_method_modularity(
+  seurat,
+  graph_name = 'RNA_snn',
+  cluster_col = 'seurat_clusters_rna',
+  method_label = 'RNA'
+)
+
+plot_method_modularity(
+  seurat,
+  graph_name = 'SCT_snn',
+  cluster_col = 'seurat_clusters_sct',
+  method_label = 'SCT'
+)
+```
+
 # QC metrics across clusters by normalisation method
 Projects log-scale UMI count and gene count onto each UMAP and visualises QC metric distributions by method-specific cluster labels.
 
@@ -1207,7 +1346,7 @@ safe_vlnplot <- function(obj, group_col, title_text) {
     ggplot(meta, aes(x = .data[[group_col]], y = .data[[feature]], fill = .data[[group_col]])) +
       geom_violin(trim = FALSE) +
       theme_classic() +
-      theme(legend.position = 'none', axis.text.x = element_text(angle = 45, hjust = 1)) +
+      theme(legend.position = 'none', axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 8)) +
       labs(x = group_col, y = ylab)
   }
 
@@ -1406,15 +1545,27 @@ build_top_marker_heatmap(
 ```
 
 # Doublet detection
-Doublets are annotated but **not removed** here; reassess after integration/merging.
+Doublets are annotated but **not removed** here; reassess after integration/merging. Doublets per RNA (log-normalized) clusters are shown below.
 
 ```{r doublet-detection}
-# Run scDblFinder, annotate cells, save the final Seurat object, then visualise.
-# Doublets are flagged but NOT removed here; reassess after integration/merging.
-seurat_sce <- as.SingleCellExperiment(seurat)
-seurat_sce <- scDblFinder(seurat_sce, clusters = seurat_sce$ident)
-seurat$doublet_class <- seurat_sce$scDblFinder.class
-seurat$doublet_score <- seurat_sce$scDblFinder.score
+# Run scDblFinder twice (with RNA cluster labels and with clusters = NULL), then
+# save both annotations in metadata. Doublets are flagged but NOT removed here;
+# reassess after integration/merging.
+seurat_sce_clustered <- as.SingleCellExperiment(seurat)
+seurat_sce_clustered$cluster_for_dbl <- as.character(seurat$seurat_clusters_rna)
+seurat_sce_clustered <- scDblFinder(seurat_sce_clustered, clusters = 'cluster_for_dbl')
+
+seurat_sce_unclustered <- as.SingleCellExperiment(seurat)
+seurat_sce_unclustered <- scDblFinder(seurat_sce_unclustered, clusters = NULL)
+
+seurat$doublet_class_clustered <- seurat_sce_clustered$scDblFinder.class
+seurat$doublet_score_clustered <- seurat_sce_clustered$scDblFinder.score
+seurat$doublet_class_unclustered <- seurat_sce_unclustered$scDblFinder.class
+seurat$doublet_score_unclustered <- seurat_sce_unclustered$scDblFinder.score
+
+# Keep compatibility columns mapped to the clustered run.
+seurat$doublet_class <- seurat$doublet_class_clustered
+seurat$doublet_score <- seurat$doublet_score_clustered
 
 rds_path <- file.path(params$output_dir, paste0(params$sample_name, '_QC.rds'))
 saveRDS(seurat, file = rds_path)
@@ -1422,24 +1573,78 @@ cat('Saved:', rds_path, '\n')
 ```
 
 ```{r doublet-plots}
-# Doublet distribution across clusters
-print(table(seurat$seurat_clusters_sct, seurat$doublet_class))
+# Doublet distribution across RNA clusters for both scDblFinder runs
+cat('Clustered run (clusters = seurat_clusters_rna):\n')
+print(table(seurat$seurat_clusters_rna, seurat$doublet_class_clustered))
+cat('\nUnclustered run (clusters = NULL):\n')
+print(table(seurat$seurat_clusters_rna, seurat$doublet_class_unclustered))
 
-Idents(seurat) <- 'doublet_class'
-DimPlot(seurat) + scale_color_manual(values = c('grey', 'red'))
-FeaturePlot(seurat, features = 'doublet_score')
+Idents(seurat) <- 'doublet_class_clustered'
+DimPlot(seurat, reduction = 'umap_rna') +
+  scale_color_manual(values = c('singlet' = 'grey70', 'doublet' = 'red3')) +
+  ggtitle('scDblFinder (clustered): doublet class')
+FeaturePlot(seurat, features = 'doublet_score_clustered', reduction = 'umap_rna') +
+  ggtitle('scDblFinder (clustered): doublet score')
 
-Idents(seurat) <- 'seurat_clusters_sct'
-VlnPlot(seurat, features = 'doublet_score') + NoLegend()
+Idents(seurat) <- 'doublet_class_unclustered'
+DimPlot(seurat, reduction = 'umap_rna') +
+  scale_color_manual(values = c('singlet' = 'grey70', 'doublet' = 'red3')) +
+  ggtitle('scDblFinder (unclustered): doublet class')
+FeaturePlot(seurat, features = 'doublet_score_unclustered', reduction = 'umap_rna') +
+  ggtitle('scDblFinder (unclustered): doublet score')
 
-# Proportion of doublets per cluster
-prop.doublets <- as.data.frame(
-  prop.table(table(seurat$seurat_clusters_sct, seurat$doublet_class), margin = 1)
+Idents(seurat) <- 'seurat_clusters_rna'
+VlnPlot(
+  seurat,
+  features = c('doublet_score_clustered', 'doublet_score_unclustered')
+) + NoLegend()
+
+# Compare UMI count distributions between singlets and doublets for each run.
+doublet_umi_df <- seurat@meta.data[, c(
+  'nCount_RNA',
+  'doublet_class_clustered',
+  'doublet_class_unclustered'
+)]
+
+ggplot(doublet_umi_df, aes(x = doublet_class_clustered, y = nCount_RNA, fill = doublet_class_clustered)) +
+  geom_violin(trim = FALSE) +
+  scale_y_log10() +
+  scale_fill_manual(values = c('singlet' = 'grey70', 'doublet' = 'red3')) +
+  theme_classic() +
+  theme(legend.position = 'none') +
+  xlab('scDblFinder class') +
+  ylab('UMI count (nCount_RNA, log10 scale)') +
+  ggtitle('UMI count by doublet class (clustered scDblFinder)')
+
+ggplot(doublet_umi_df, aes(x = doublet_class_unclustered, y = nCount_RNA, fill = doublet_class_unclustered)) +
+  geom_violin(trim = FALSE) +
+  scale_y_log10() +
+  scale_fill_manual(values = c('singlet' = 'grey70', 'doublet' = 'red3')) +
+  theme_classic() +
+  theme(legend.position = 'none') +
+  xlab('scDblFinder class') +
+  ylab('UMI count (nCount_RNA, log10 scale)') +
+  ggtitle('UMI count by doublet class (unclustered scDblFinder)')
+
+# Proportion of doublets per cluster for each run
+prop.doublets.clustered <- as.data.frame(
+  prop.table(table(seurat$seurat_clusters_rna, seurat$doublet_class_clustered), margin = 1)
 )
-ggplot(prop.doublets, aes(x = Var1, y = Freq, fill = Var2)) +
+ggplot(prop.doublets.clustered, aes(x = Var1, y = Freq, fill = Var2)) +
   geom_bar(stat = 'identity') +
   theme_classic() +
   xlab('Cluster number') +
-  ylab('Fraction doublet class')
+  ylab('Fraction doublet class') +
+  ggtitle('Doublet fraction by cluster (clustered scDblFinder)')
+
+prop.doublets.unclustered <- as.data.frame(
+  prop.table(table(seurat$seurat_clusters_rna, seurat$doublet_class_unclustered), margin = 1)
+)
+ggplot(prop.doublets.unclustered, aes(x = Var1, y = Freq, fill = Var2)) +
+  geom_bar(stat = 'identity') +
+  theme_classic() +
+  xlab('Cluster number') +
+  ylab('Fraction doublet class') +
+  ggtitle('Doublet fraction by cluster (unclustered scDblFinder)')
 ```
 

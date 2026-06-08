@@ -34,6 +34,9 @@ install.packages(c("rmarkdown", "ggplot2", "patchwork", "viridis",
 
 BiocManager::install(c("Seurat", "scater", "scDblFinder"))
 
+# For graph modularity diagnostics (pairwiseModularity)
+BiocManager::install("bluster")
+
 # From GitHub / internal
 remotes::install_github("immunogenomics/presto")
 # CVRCFunc — install from internal source as needed
