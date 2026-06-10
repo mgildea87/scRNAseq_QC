@@ -171,22 +171,6 @@ if (need_sct_reduction || need_sct_clusters) {
   message('Computing merged SCTransform reductions/clusters...')
   set.seed(1234)
   DefaultAssay(seurat) <- 'SCT'
-
-  # Use the union of feature names across all SCT data layers/models.
-  sct_data_layers <- Layers(seurat[['SCT']], search = '^data')
-  if (length(sct_data_layers) == 0) {
-    sct_data_layers <- 'data'
-  }
-  sct_features <- unique(unlist(lapply(sct_data_layers, function(layer_name) {
-    rownames(LayerData(seurat, assay = 'SCT', layer = layer_name))
-  }), use.names = FALSE))
-
-  if (length(sct_features) == 0) {
-    stop('No features found in SCT data layer(s); cannot set variable features for SCT clustering.')
-  }
-  VariableFeatures(seurat, assay = 'SCT') <- sct_features
-  message('Set SCT variable features from union of SCT data layers: ', length(sct_features), ' features')
-
   seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_merged')
   seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_SCT_merged', assay = 'SCT', reduction.name = 'UMAP_SCT_merged')
   seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_merged', dims = c(1:30))
