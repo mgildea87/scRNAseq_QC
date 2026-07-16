@@ -1,11 +1,59 @@
 # 10x scRNA-seq QC and processing pipeline
 
 Generates a self-contained HTML QC report and a filtered Seurat RDS object for
-each sample processed by CellRanger.  
+each sample processed by CellRanger or similar.  
 Can be run on a single sample interactively or batched across many samples via
 a sample sheet.
 
 GitHub repository: https://github.com/mgildea87/scRNAseq_QC
+
+---
+
+## QC workflow summary
+
+### `sample_QC.Rmd` (per-sample QC)
+
+- Load filtered and raw count matrices (10x MEX folders or .h5 files)
+- Barcode rank (knee) plot
+- Remove genes detected in fewer than 0.1% of barcodes
+- Compute per-cell QC metrics: UMI count, genes detected, % mitochondrial, % haemoglobin
+- Build MAD-based threshold tables for each metric
+- Pre-filter QC plots: violins, histograms, scatter pairs
+- MALAT1 scatter (proxy for cell viability)
+- Apply filters (hard thresholds from params, or MAD defaults)
+- Post-filter QC plots
+- Normalise → variable features → PCA → clustering → UMAP
+- Mean–variance plot and SCTransform model assessment
+- Per-cluster QC metric distributions
+- Top marker heatmap (Wilcoxon, top 20 per cluster)
+- Doublet detection with `scDblFinder` (annotated, not removed)
+- Save filtered + annotated Seurat object to RDS
+
+### `merge_analysis.Rmd` (optional post-merge analysis)
+
+- Load `merged_QC.rds`, detect species from feature naming, and harmonize metadata fields (`batch`, `condition`, `sample_name`)
+- Build RNA merged reductions/clusters when missing: normalize, variable features, scale, PCA, neighbors, clustering, UMAP
+- Build SCT merged reductions/clusters when missing: PCA, neighbors, clustering, UMAP on the SCT assay
+- Save updated merged object back to `merged_QC.rds`
+- Generate RNA and SCT dimensional reduction plots by batch/sample and by merged cluster labels
+- Compute and plot cluster abundance distributions across samples and batches (RNA and SCT cluster assignments)
+- Compute LISI scores for batch/sample_name in RNA and SCT PCA spaces, save to `lisi.rds`, and visualize histograms/FeaturePlots/violins
+- Plot QC metric distributions by cluster (for example `nCount_RNA`, `nFeature_RNA`, `percent.mt`, cell-cycle scores)
+- Run marker discovery for merged RNA and SCT clusters and render top-marker heatmaps
+- Render merged analysis report (`merge_analysis.html`)
+
+### `integrate_RNA.Rmd` (optional post-merge integration)
+
+- Load `merged_QC.rds` and validate required integration grouping metadata (`Batch` or `Sample` level)
+- RNA integration workflow: split assay layers by integration group, normalize, find variable features, scale, PCA, RPCA integration, neighbors, clustering, UMAP
+- SCT integration workflow: apply `SCTransform`, split SCT layers by integration group, PCA, RPCA integration, neighbors, clustering, UMAP
+- Save integrated objects (`integrated.rds` for RNA and `integrated_SCT.rds` for SCT)
+- Plot integrated UMAPs colored by sample, batch, and integrated cluster IDs (RNA and SCT)
+- Compute and visualize cluster abundance distributions across samples and batches (RNA and SCT integrated clusters)
+- Compute LISI batch-mixing scores for integrated embeddings (RNA and SCT), save RDS outputs, and visualize distributions
+- Plot QC metric distributions in integrated objects (for example `nCount_RNA`, `nFeature_RNA`, `percent.mt`, `Malat1`)
+- Run marker discovery on RNA/SCT integrated clusters and render top-marker heatmaps
+- Render integration report (`integrate_RNA.html`)
 
 ---
 
@@ -21,8 +69,6 @@ GitHub repository: https://github.com/mgildea87/scRNAseq_QC
 | `submit_QC_batch.sh` | Cluster launcher — submits one SLURM job per sample (plus a dependent merge job) |
 | `samples.csv` | Sample sheet — edit this to point to your data |
 | `support_files/` | Bundled TF and haemoglobin reference files used by the templates |
-
----
 
 ## Requirements
 
@@ -306,22 +352,26 @@ When `--run_integration TRUE` is used and merge succeeds, the integration step c
 
 ---
 
-## QC workflow summary
+## Reproducibility logging (automatic)
 
-The Rmd template performs the following steps in order:
+Reproducibility metadata is logged automatically every time you run the pipeline
+using `run_qc_batch_local.sh` or `submit_QC_batch.sh`.
 
-1. Load filtered and raw count matrices (10x MEX folders or .h5 files)
-2. Barcode rank (knee) plot
-3. Remove genes detected in fewer than 0.1% of barcodes
-4. Compute per-cell QC metrics: UMI count, genes detected, % mitochondrial, % haemoglobin
-5. Build MAD-based threshold tables for each metric
-6. Pre-filter QC plots: violins, histograms, scatter pairs
-7. MALAT1 scatter (proxy for cell viability)
-8. Apply filters (hard thresholds from params, or MAD defaults)
-9. Post-filter QC plots
-10. Normalise → variable features → PCA → clustering → UMAP
-11. Mean–variance plot and SCTransform model assessment
-12. Per-cluster QC metric distributions
-13. Top marker heatmap (Wilcoxon, top 20 per cluster)
-14. Doublet detection with `scDblFinder` (annotated, not removed)
-15. Save filtered + annotated Seurat object to RDS
+Use your normal run command, for example:
+
+```bash
+bash run_qc_batch_local.sh \
+  --sample_sheet /abs/path/to/projects/Project_001/samples.csv \
+  --output_dir /abs/path/to/projects/Project_001/results/QC
+```
+
+Metadata is written to `<output_dir>/run_metadata/` and includes:
+
+- Git release/source info: repository URL, commit SHA, branch, exact tag (if any), describe string, worktree status
+- Run command: an executable shell script with the exact invoked command
+- Conda environment info: active conda environment name and `conda info --envs`
+- Conda export: full environment export when conda is available and an env is active
+- Run timing/status: run start and run end files with timestamp, invocation ID, and exit status
+
+When using `submit_QC_batch.sh`, coordinator-level metadata is also logged in the
+same `run_metadata` directory.

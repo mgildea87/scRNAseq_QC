@@ -180,6 +180,100 @@ script_dir <- tryCatch(
   error = function(e) getwd()
 )
 
+# Normalize output path early so metadata and outputs are colocated.
+opt$output_dir <- normalizePath(opt$output_dir, winslash = "/", mustWork = FALSE)
+
+safe_system_output <- function(cmd, args = character()) {
+  out <- tryCatch(
+    suppressWarnings(system2(cmd, args = args, stdout = TRUE, stderr = TRUE)),
+    error = function(e) character()
+  )
+  if (length(out) == 0L) NA_character_ else paste(out, collapse = "\n")
+}
+
+write_run_metadata <- function(opt, script_dir) {
+  dir.create(opt$output_dir, showWarnings = FALSE, recursive = TRUE)
+  meta_dir <- file.path(opt$output_dir, "run_metadata")
+  dir.create(meta_dir, showWarnings = FALSE, recursive = TRUE)
+
+  invocation_id <- paste0(format(Sys.time(), "%Y%m%dT%H%M%S"), "_", Sys.getpid())
+
+  git_root <- safe_system_output("git", c("-C", script_dir, "rev-parse", "--show-toplevel"))
+  if (is.na(git_root)) git_root <- script_dir
+
+  repo_url <- safe_system_output("git", c("-C", git_root, "remote", "get-url", "origin"))
+  commit_sha <- safe_system_output("git", c("-C", git_root, "rev-parse", "HEAD"))
+  branch_name <- safe_system_output("git", c("-C", git_root, "rev-parse", "--abbrev-ref", "HEAD"))
+  exact_tag <- safe_system_output("git", c("-C", git_root, "describe", "--tags", "--exact-match"))
+  describe_tag <- safe_system_output("git", c("-C", git_root, "describe", "--tags", "--always"))
+  worktree_status <- safe_system_output("git", c("-C", git_root, "status", "--porcelain"))
+  worktree_label <- if (is.na(worktree_status) || worktree_status == "") "clean" else "dirty"
+
+  release_path <- file.path(meta_dir, "release_info.txt")
+  writeLines(c(
+    paste0("recorded_utc=", format(Sys.time(), tz = "UTC", usetz = TRUE)),
+    paste0("git_root=", git_root),
+    paste0("repo_url=", if (is.na(repo_url)) "<unknown>" else repo_url),
+    paste0("commit_sha=", if (is.na(commit_sha)) "<unknown>" else commit_sha),
+    paste0("branch=", if (is.na(branch_name)) "<unknown>" else branch_name),
+    paste0("exact_tag=", if (is.na(exact_tag)) "<none>" else exact_tag),
+    paste0("describe=", if (is.na(describe_tag)) "<none>" else describe_tag),
+    paste0("worktree_status=", worktree_label)
+  ), con = release_path)
+
+  trailing <- commandArgs(trailingOnly = TRUE)
+  run_cmd <- paste(c("Rscript", shQuote(file.path(script_dir, "qc_batch_runner.R")), shQuote(trailing)), collapse = " ")
+  run_cmd_path <- file.path(meta_dir, paste0("run_command_", invocation_id, ".sh"))
+  writeLines(c("#!/bin/bash", "set -euo pipefail", run_cmd), con = run_cmd_path)
+
+  conda_info_path <- file.path(meta_dir, "conda_info.txt")
+  conda_env <- Sys.getenv("CONDA_DEFAULT_ENV", unset = "")
+  conda_envs <- safe_system_output("conda", c("info", "--envs"))
+  writeLines(c(
+    paste0("recorded_utc=", format(Sys.time(), tz = "UTC", usetz = TRUE)),
+    paste0("CONDA_DEFAULT_ENV=", ifelse(nzchar(conda_env), conda_env, "<unset>")),
+    "",
+    "conda info --envs:",
+    if (is.na(conda_envs)) "<conda unavailable>" else conda_envs
+  ), con = conda_info_path)
+
+  if (nzchar(conda_env) && !is.na(conda_envs)) {
+    conda_export <- safe_system_output("conda", c("env", "export", "-n", conda_env))
+    if (!is.na(conda_export)) {
+      writeLines(conda_export, con = file.path(meta_dir, "conda_env_export.yml"))
+    }
+  }
+
+  start_path <- file.path(meta_dir, paste0("run_start_", invocation_id, ".txt"))
+  writeLines(c(
+    paste0("start_utc=", format(Sys.time(), tz = "UTC", usetz = TRUE)),
+    paste0("invocation_id=", invocation_id),
+    paste0("command=", run_cmd)
+  ), con = start_path)
+
+  list(meta_dir = meta_dir, invocation_id = invocation_id, run_cmd = run_cmd)
+}
+
+run_meta <- write_run_metadata(opt, script_dir)
+run_status <- "FAILED"
+run_exit_status <- 1L
+
+on.exit({
+  end_path <- file.path(run_meta$meta_dir, paste0("run_end_", run_meta$invocation_id, ".txt"))
+  writeLines(c(
+    paste0("end_utc=", format(Sys.time(), tz = "UTC", usetz = TRUE)),
+    paste0("invocation_id=", run_meta$invocation_id),
+    paste0("status=", run_status),
+    paste0("exit_status=", run_exit_status),
+    paste0("command=", run_meta$run_cmd)
+  ), con = end_path)
+}, add = TRUE)
+
+finish_run <- function(status_code = 0L, status_label = "SUCCESS") {
+  run_status <<- status_label
+  run_exit_status <<- as.integer(status_code)
+}
+
 # ── Validate required arguments ────────────────────────────────────────────────
 if (is.null(opt$sample_sheet)) {
   stop("--sample_sheet is required. See script header for usage.", call. = FALSE)
@@ -369,6 +463,7 @@ if (isTRUE(opt$integration_only)) {
   dir.create(file.path(opt$output_dir, "chunk_logs"), showWarnings = FALSE, recursive = TRUE)
   message(strrep("-", 60))
   render_integration_rmd(opt$output_dir, opt$integration_template)
+  finish_run(0L, "SUCCESS")
   quit(status = 0)
 }
 
@@ -391,6 +486,7 @@ if (isTRUE(opt$merge_only)) {
       render_integration_rmd(opt$output_dir, opt$integration_template)
     }
   }
+  finish_run(0L, "SUCCESS")
   quit(status = 0)
 }
 
@@ -726,6 +822,7 @@ failed <- results[!grepl("^SUCCESS", results$status), ]
 if (nrow(failed) > 0) {
   message("\nFailed samples:")
   print(failed, row.names = FALSE)
+  finish_run(1L, "FAILED")
   quit(status = 1)
 } else {
   message("\nAll samples completed successfully.")
@@ -751,3 +848,5 @@ if (is.null(opt$sample_name) && nrow(samples) > 1L && nrow(failed) == 0L) {
     }
   }
 }
+
+finish_run(0L, "SUCCESS")

@@ -26,10 +26,13 @@
 # =============================================================================
 
 set -euo pipefail
+ORIGINAL_ARGS=("$@")
 
 # ── Fixed paths ───────────────────────────────────────────────────────────────
-TEMPLATE_DIR="/gpfs/data/cvrcbioinfolab/gildem01/analysis_Rmd_templates_and_scripts/scRNAseq/Seurat_V5/QC"
-CONDA_INIT="/gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATE_DIR="${TEMPLATE_DIR:-${SCRIPT_DIR}}"
+CONDA_INIT_DEFAULT="/gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh"
+CONDA_INIT="${CONDA_INIT:-${CONDA_INIT_DEFAULT}}"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 SAMPLE_SHEET=""
@@ -251,6 +254,11 @@ if [[ ! -f "${SAMPLE_SHEET}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${TEMPLATE_DIR}/qc_batch_runner.R" ]]; then
+  echo "ERROR: TEMPLATE_DIR does not contain qc_batch_runner.R: ${TEMPLATE_DIR}" >&2
+  exit 1
+fi
+
 # Resolve to absolute paths so jobs running in any working directory find them
 SAMPLE_SHEET="$(realpath "${SAMPLE_SHEET}")"
 OUTPUT_DIR="$(realpath -m "${OUTPUT_DIR}")"
@@ -258,6 +266,55 @@ OUTPUT_DIR="$(realpath -m "${OUTPUT_DIR}")"
 # Ensure the main QC output directory exists even when using defaults
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p "${OUTPUT_DIR}/logs"
+mkdir -p "${OUTPUT_DIR}/run_metadata"
+
+# ── Record coordinator invocation metadata ───────────────────────────────────
+INVOCATION_ID="$(date -u +%Y%m%dT%H%M%SZ)_$$"
+RUN_CMD="bash $(realpath "$0")"
+for arg in "${ORIGINAL_ARGS[@]}"; do
+  RUN_CMD+=" $(printf '%q' "$arg")"
+done
+
+GIT_ROOT="$(git -C "${TEMPLATE_DIR}" rev-parse --show-toplevel 2>/dev/null || echo "${TEMPLATE_DIR}")"
+REPO_URL="$(git -C "${GIT_ROOT}" remote get-url origin 2>/dev/null || echo "<unknown>")"
+COMMIT_SHA="$(git -C "${GIT_ROOT}" rev-parse HEAD 2>/dev/null || echo "<unknown>")"
+BRANCH_NAME="$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<unknown>")"
+EXACT_TAG="$(git -C "${GIT_ROOT}" describe --tags --exact-match 2>/dev/null || echo "<none>")"
+DESCRIBE_TAG="$(git -C "${GIT_ROOT}" describe --tags --always 2>/dev/null || echo "<none>")"
+if [[ -n "$(git -C "${GIT_ROOT}" status --porcelain 2>/dev/null || true)" ]]; then
+  WORKTREE_STATUS="dirty"
+else
+  WORKTREE_STATUS="clean"
+fi
+
+{
+  echo "recorded_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "git_root=${GIT_ROOT}"
+  echo "repo_url=${REPO_URL}"
+  echo "commit_sha=${COMMIT_SHA}"
+  echo "branch=${BRANCH_NAME}"
+  echo "exact_tag=${EXACT_TAG}"
+  echo "describe=${DESCRIBE_TAG}"
+  echo "worktree_status=${WORKTREE_STATUS}"
+} > "${OUTPUT_DIR}/run_metadata/release_info_submit.txt"
+
+{
+  echo "#!/bin/bash"
+  echo "set -euo pipefail"
+  echo "${RUN_CMD}"
+} > "${OUTPUT_DIR}/run_metadata/run_command_submit_${INVOCATION_ID}.sh"
+
+{
+  echo "recorded_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "CONDA_DEFAULT_ENV=${CONDA_DEFAULT_ENV:-<unset>}"
+  echo
+  echo "conda info --envs:"
+  conda info --envs 2>/dev/null || echo "<conda unavailable>"
+} > "${OUTPUT_DIR}/run_metadata/conda_info_submit.txt"
+
+if command -v conda >/dev/null 2>&1 && [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+  conda env export -n "${CONDA_DEFAULT_ENV}" > "${OUTPUT_DIR}/run_metadata/conda_env_export_submit.yml" 2>/dev/null || true
+fi
 
 # ── Read sample names from CSV (skip header, column 1) ────────────────────────
 mapfile -t SAMPLES < <(tail -n +2 "${SAMPLE_SHEET}" | cut -d',' -f1 | tr -d '\r')
@@ -286,9 +343,13 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
     --parsable \
     --wrap="
       set -euo pipefail
-      set +u
-      source \"${CONDA_INIT}\"
-      set -u
+      if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
+        set +u
+        source \"${CONDA_INIT}\"
+        set -u
+      else
+        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+      fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Task     : integration only\"
@@ -321,9 +382,13 @@ if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
     --parsable \
     --wrap="
       set -euo pipefail
-      set +u
-      source \"${CONDA_INIT}\"
-      set -u
+      if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
+        set +u
+        source \"${CONDA_INIT}\"
+        set -u
+      else
+        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+      fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Task     : merge only\"
@@ -359,11 +424,15 @@ for SAMPLE in "${SAMPLES[@]}"; do
     --parsable \
     --wrap="
       set -euo pipefail
-      # Some environment init scripts assume vars like PYTHONPATH may be unset.
-      # Temporarily relax nounset while sourcing, then restore strict mode.
-      set +u
-      source \"${CONDA_INIT}\"
-      set -u
+      if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
+        # Some environment init scripts assume vars like PYTHONPATH may be unset.
+        # Temporarily relax nounset while sourcing, then restore strict mode.
+        set +u
+        source \"${CONDA_INIT}\"
+        set -u
+      else
+        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+      fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Sample   : ${SAMPLE}\"
@@ -400,9 +469,13 @@ if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
     --parsable \
     --wrap="
       set -euo pipefail
-      set +u
-      source \"${CONDA_INIT}\"
-      set -u
+      if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
+        set +u
+        source \"${CONDA_INIT}\"
+        set -u
+      else
+        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+      fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Task     : merge all samples\"
@@ -430,9 +503,13 @@ if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
       --parsable \
       --wrap="
         set -euo pipefail
-        set +u
-        source \"${CONDA_INIT}\"
-        set -u
+        if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
+          set +u
+          source \"${CONDA_INIT}\"
+          set -u
+        else
+          echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+        fi
         echo \"Job ID   : \${SLURM_JOB_ID}\"
         echo \"Node     : \${SLURMD_NODENAME}\"
         echo \"Task     : run integration\"
