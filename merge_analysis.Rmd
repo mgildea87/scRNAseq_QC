@@ -126,24 +126,14 @@ message('Autodetected species: ', species)
 
 # Harmonize metadata fields expected by this report.
 meta_cols <- colnames(seurat@meta.data)
-if (!'batch' %in% meta_cols) {
-  if ('sample_name' %in% meta_cols) {
-    seurat$batch <- seurat$sample_name
-  } else if ('orig.ident' %in% meta_cols) {
-    seurat$batch <- seurat$orig.ident
-  } else {
-    seurat$batch <- rep('batch_1', ncol(seurat))
-  }
-}
-if (!'condition' %in% colnames(seurat@meta.data)) {
-  seurat$condition <- seurat$batch
-}
-if (!'sample_name' %in% colnames(seurat@meta.data)) {
-  if ('orig.ident' %in% colnames(seurat@meta.data)) {
-    seurat$sample_name <- seurat$orig.ident
-  } else {
-    seurat$sample_name <- seurat$batch
-  }
+required_meta <- c('batch', 'sample_name')
+missing_meta <- setdiff(required_meta, meta_cols)
+if (length(missing_meta) > 0L) {
+  stop(
+    'merged_QC.rds is missing required metadata column(s): ',
+    paste(missing_meta, collapse = ', '),
+    call. = FALSE
+  )
 }
 
 # Build merged reductions/clusters if they are not already present.

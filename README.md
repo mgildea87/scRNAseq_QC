@@ -31,7 +31,7 @@ GitHub repository: https://github.com/mgildea87/scRNAseq_QC
 
 ### `merge_analysis.Rmd` (optional post-merge analysis)
 
-- Load `merged_QC.rds`, detect species from feature naming, and harmonize metadata fields (`batch`, `condition`, `sample_name`)
+- Load `merged_QC.rds`, detect species from feature naming, and require the merged metadata fields `batch` and `sample_name`
 - Build RNA merged reductions/clusters when missing: normalize, variable features, scale, PCA, neighbors, clustering, UMAP
 - Build SCT merged reductions/clusters when missing: PCA, neighbors, clustering, UMAP on the SCT assay
 - Save updated merged object back to `merged_QC.rds`
