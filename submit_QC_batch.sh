@@ -12,7 +12,6 @@
 #       --output_dir   /abs/path/to/results/QC
 #
 # OPTIONAL FLAGS (forwarded to qc_batch_runner.R):
-#   --outs_subdir <dir>   subdirectory inside cellranger_dir (default: outs)
 #   --mem         <GB>    memory per job in GB              (default: 32)
 #   --merge_mem   <GB>    memory for merge job in GB         (default: 64)
 #   --integration_mem <GB> memory for integration job in GB   (default: 64)
@@ -37,7 +36,6 @@ CONDA_INIT="${CONDA_INIT:-${CONDA_INIT_DEFAULT}}"
 # ── Parse arguments ───────────────────────────────────────────────────────────
 SAMPLE_SHEET=""
 OUTPUT_DIR="QC"
-OUTS_SUBDIR="outs"
 MEM_GB=32
 MERGE_MEM_GB=64
 INTEGRATION_MEM_GB=64
@@ -67,14 +65,6 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_DIR="${2-}"
       if [[ -z "${OUTPUT_DIR}" || "${OUTPUT_DIR}" == --* ]]; then
         echo "ERROR: --output_dir requires a value." >&2
-        exit 1
-      fi
-      shift 2
-      ;;
-    --outs_subdir)
-      OUTS_SUBDIR="${2-}"
-      if [[ -z "${OUTS_SUBDIR}" || "${OUTS_SUBDIR}" == --* ]]; then
-        echo "ERROR: --outs_subdir requires a value." >&2
         exit 1
       fi
       shift 2
@@ -360,7 +350,6 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
         --output_dir   \"${OUTPUT_DIR}\" \
         --integration_only TRUE \
         --integration_level \"${INTEGRATION_LEVEL}\" \
-        --outs_subdir  \"${OUTS_SUBDIR}\" \
         --use_cellbender \"${USE_CELLBENDER}\"
     ")
   echo "  Submitted: integration-only job  (job ${INTEGRATE_JOB_ID})"
@@ -396,7 +385,6 @@ if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
       Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
-        --outs_subdir  \"${OUTS_SUBDIR}\" \
         --merge_only   TRUE \
         --run_integration \"${RUN_INTEGRATION}\" \
         --integration_level \"${INTEGRATION_LEVEL}\"
@@ -443,7 +431,6 @@ for SAMPLE in "${SAMPLES[@]}"; do
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --sample_name  \"${SAMPLE}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
-        --outs_subdir  \"${OUTS_SUBDIR}\" \
         --use_cellbender \"${USE_CELLBENDER}\"
       echo \"Finished : \$(date)\"
     ")
@@ -483,7 +470,6 @@ if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
       Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
-        --outs_subdir  \"${OUTS_SUBDIR}\" \
         --merge_only   TRUE
       echo \"Finished : \$(date)\"
     ")
