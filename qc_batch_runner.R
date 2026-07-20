@@ -8,25 +8,18 @@
 #   Rscript qc_batch_runner.R --sample_sheet samples.csv --output_dir results/QC
 #
 # SAMPLE SHEET FORMAT (CSV, with header):
-#   sample_name,cellranger_dir,batch
-#   Control_1,/path/to/cellranger/count-Control-1/outs,A
-#   Treatment_1,/path/to/cellranger/count-Treatment-1/outs,A
+#   sample_name,filtered_path,raw_path,batch
+#   Control_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A
+#   Treatment_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A
 #
-# The script expects CellRanger's standard output layout, i.e.:
-#   <cellranger_dir>/outs/filtered_feature_bc_matrix/
-#   <cellranger_dir>/outs/raw_feature_bc_matrix/
-# If your paths already point to the `outs` subfolder, set --outs_subdir ""
-#
-# Input names are auto-detected when they differ slightly from standard
-# names, as long as they contain a valid 10x MEX matrix layout or 10x .h5 file.
+# The pipeline now expects explicit matrix paths in the sample sheet.
+# Each path should point directly to a 10x MEX directory or a 10x .h5/.hdf5 file.
 #
 # OPTIONAL ARGUMENTS:
 #   --template      Path to the .Rmd template
 #                   (default: same directory as this script)
 #   --merge_template Path to merge_analysis.Rmd template
 #                   (default: same directory as this script)
-#   --outs_subdir   Subdirectory appended to cellranger_dir before
-#                   filtered/raw paths (default: "outs")
 #   --ncores        Number of samples to render in parallel (default: 1)
 #   --merge_only    If TRUE, skip rendering and only merge existing
 #                   <sample_name>_QC.rds files (default: FALSE)
@@ -58,7 +51,6 @@ print_usage_and_exit <- function(status = 0L) {
     "  --output_dir <path>     Directory for HTML reports and RDS files [default: QC]\n",
     "  --template <path>       Path to sample_QC.Rmd [default: same dir as script]\n",
     "  --merge_template <path> Path to merge_analysis.Rmd [default: same dir as script]\n",
-    "  --outs_subdir <name>    Subdirectory inside cellranger_dir [default: outs]\n",
     "  --ncores <int>          Number of samples to render in parallel [default: 1]\n",
     "  --sample_name <name>    Process only one sample_name from sheet\n",
     "  --merge_only <TRUE/FALSE>  If TRUE, skip individual sample QC and only merge existing RDS files and render merged report. Requires presence of the individual <sample_name>_QC.rds files present in the sample_sheet. [default: FALSE]\n",
@@ -82,7 +74,6 @@ parse_cli_args <- function(args) {
     merge_template = NULL,
     integration_template = NULL,
     integration_level = NULL,
-    outs_subdir = "outs",
     ncores = 1L,
     sample_name = NULL,
     merge_only = "FALSE",
@@ -164,7 +155,6 @@ message("Run options:")
 message("  sample_sheet    : ", opt$sample_sheet)
 message("  output_dir      : ", opt$output_dir)
 message("  sample_name     : ", if (is.null(opt$sample_name)) "<all>" else opt$sample_name)
-message("  outs_subdir     : ", opt$outs_subdir)
 message("  ncores          : ", opt$ncores)
 message("  use_cellbender  : ", opt$use_cellbender)
 message("  skip_merge      : ", opt$skip_merge)
@@ -318,11 +308,14 @@ if (isTRUE(opt$integration_only) && !is.null(opt$sample_name)) {
 # ── Read and validate sample sheet ────────────────────────────────────────────
 samples <- read.csv(opt$sample_sheet, stringsAsFactors = FALSE, strip.white = TRUE)
 
-required_cols <- c("sample_name", "cellranger_dir")
+required_cols <- c("sample_name", "filtered_path", "raw_path")
 missing_cols  <- setdiff(required_cols, colnames(samples))
 if (length(missing_cols) > 0) {
-  stop("Sample sheet is missing required column(s): ",
-       paste(missing_cols, collapse = ", "), call. = FALSE)
+  stop(
+    "Sample sheet is missing required column(s): ",
+    paste(missing_cols, collapse = ", "),
+    call. = FALSE
+  )
 }
 
 if (anyDuplicated(samples$sample_name)) {
@@ -335,6 +328,22 @@ if (!"batch" %in% colnames(samples)) {
 } else {
   samples$batch <- trimws(as.character(samples$batch))
   samples$batch[is.na(samples$batch) | samples$batch == ""] <- "A"
+}
+
+normalize_optional_path <- function(x) {
+  x <- trimws(as.character(x))
+  x[is.na(x) | x == ""] <- NA_character_
+  x
+}
+
+samples$filtered_path <- normalize_optional_path(samples$filtered_path)
+samples$raw_path <- normalize_optional_path(samples$raw_path)
+
+if (anyNA(samples$filtered_path) || anyNA(samples$raw_path)) {
+  stop(
+    "Every sample must provide non-empty filtered_path and raw_path values.",
+    call. = FALSE
+  )
 }
 
 # ── Merge helper ──────────────────────────────────────────────────────────────
@@ -511,242 +520,15 @@ for (col in threshold_cols) {
   if (!col %in% colnames(samples)) samples[[col]] <- NA_real_
 }
 
-# ── Resolve filtered/raw matrix directories with auto-detection ───────────────
-is_10x_mex_dir <- function(path) {
-  if (!dir.exists(path)) return(FALSE)
-  files <- list.files(path)
-  has_matrix <- any(grepl("^matrix\\.mtx(\\.gz)?$", files, ignore.case = TRUE))
-  has_barcodes <- any(grepl("^barcodes\\.tsv(\\.gz)?$", files, ignore.case = TRUE))
-  has_features <- any(grepl("^(features|genes)\\.tsv(\\.gz)?$", files, ignore.case = TRUE))
-  has_matrix && has_barcodes && has_features
-}
-
-is_10x_h5_file <- function(path) {
-  file.exists(path) && grepl("\\.(h5|hdf5)$", path, ignore.case = TRUE)
-}
-
-is_10x_input <- function(path) {
-  is_10x_mex_dir(path) || is_10x_h5_file(path)
-}
-
-rank_h5_candidates <- function(paths, kind = c("filtered", "raw")) {
-  kind <- match.arg(kind)
-  b <- basename(paths)
-  order(
-    if (kind == "filtered") !grepl("^cellbender_filtered\\.(h5|hdf5)$", b, ignore.case = TRUE) else TRUE,
-    !grepl(paste0("^", kind, "(_feature_bc_matrix)?\\.(h5|hdf5)$"), b, ignore.case = TRUE),
-    !grepl(kind, b, ignore.case = TRUE),
-    nchar(b),
-    b
-  )
-}
-
-resolve_matrix_dir <- function(base_dir, kind = c("filtered", "raw")) {
-  kind <- match.arg(kind)
-
-  if (!dir.exists(base_dir)) return(NA_character_)
-
-  if (isTRUE(opt$use_cellbender) && kind == "filtered") {
-    cb_candidates <- c("cellbender_filtered.h5", "cellbender_filtered.hdf5")
-    for (nm in cb_candidates) {
-      p <- file.path(base_dir, nm)
-      if (is_10x_h5_file(p)) return(normalizePath(p, mustWork = TRUE))
-    }
-    return(NA_character_)
-  }
-
-  preferred <- if (kind == "filtered") {
-    c("filtered_feature_bc_matrix", "filtered_gene_bc_matrices")
-  } else {
-    c("raw_feature_bc_matrix", "raw_gene_bc_matrices")
-  }
-
-  preferred_h5 <- if (kind == "filtered") {
-    c("cellbender_filtered.h5", "cellbender_filtered.hdf5",
-      "filtered_feature_bc_matrix.h5", "filtered_feature_bc_matrix.hdf5")
-  } else {
-    c("raw_feature_bc_matrix.h5", "raw_feature_bc_matrix.hdf5")
-  }
-
-  for (nm in preferred) {
-    p <- file.path(base_dir, nm)
-    if (is_10x_mex_dir(p)) return(normalizePath(p, mustWork = TRUE))
-  }
-
-  for (nm in preferred_h5) {
-    p <- file.path(base_dir, nm)
-    if (is_10x_h5_file(p)) return(normalizePath(p, mustWork = TRUE))
-  }
-
-  h5_files <- list.files(base_dir, full.names = TRUE, recursive = FALSE)
-  h5_files <- h5_files[vapply(h5_files, is_10x_h5_file, logical(1))]
-  if (length(h5_files) > 0) {
-    h5_match <- h5_files[grepl(kind, basename(h5_files), ignore.case = TRUE)]
-    if (length(h5_match) == 1L) {
-      return(normalizePath(h5_match, mustWork = TRUE))
-    }
-    if (length(h5_match) > 1L) {
-      ranked <- rank_h5_candidates(h5_match, kind = kind)
-      warning(
-        "Multiple ", kind, " .h5 inputs detected in ", base_dir,
-        "; using: ", basename(h5_match[ranked[1L]]),
-        call. = FALSE
-      )
-      return(normalizePath(h5_match[ranked[1L]], mustWork = TRUE))
-    }
-  }
-
-  child_dirs <- list.dirs(base_dir, full.names = TRUE, recursive = FALSE)
-  if (length(child_dirs) == 0) return(NA_character_)
-
-  candidate <- child_dirs[
-    grepl(kind, basename(child_dirs), ignore.case = TRUE) &
-      vapply(child_dirs, is_10x_mex_dir, logical(1))
-  ]
-
-  if (length(candidate) == 1L) {
-    return(normalizePath(candidate, mustWork = TRUE))
-  }
-
-  if (length(candidate) > 1L) {
-    ranked <- order(
-      !grepl("feature_bc_matrix", basename(candidate), ignore.case = TRUE),
-      nchar(basename(candidate)),
-      basename(candidate)
-    )
-    warning(
-      "Multiple ", kind, " matrix directories detected in ", base_dir,
-      "; using: ", basename(candidate[ranked[1L]]),
-      call. = FALSE
-    )
-    return(normalizePath(candidate[ranked[1L]], mustWork = TRUE))
-  }
-
-  # Fallback: recursive search for nested layouts (e.g., per_sample_outs/*/count/sample_*_feature_bc_matrix)
-  nested_dirs <- list.dirs(base_dir, full.names = TRUE, recursive = TRUE)
-  if (length(nested_dirs) > 0) {
-    nested_candidate <- nested_dirs[
-      grepl(kind, basename(nested_dirs), ignore.case = TRUE) &
-        vapply(nested_dirs, is_10x_mex_dir, logical(1))
-    ]
-    if (length(nested_candidate) >= 1L) {
-      ranked <- order(
-        !grepl("feature_bc_matrix", basename(nested_candidate), ignore.case = TRUE),
-        !grepl("sample_", basename(nested_candidate), ignore.case = TRUE),
-        nchar(nested_candidate),
-        nested_candidate
-      )
-      if (length(nested_candidate) > 1L) {
-        warning(
-          "Multiple nested ", kind, " matrix directories detected in ", base_dir,
-          "; using: ", nested_candidate[ranked[1L]],
-          call. = FALSE
-        )
-      }
-      return(normalizePath(nested_candidate[ranked[1L]], mustWork = TRUE))
-    }
-  }
-
-  nested_files <- list.files(base_dir, full.names = TRUE, recursive = TRUE)
-  nested_h5 <- nested_files[
-    grepl(kind, basename(nested_files), ignore.case = TRUE) &
-      vapply(nested_files, is_10x_h5_file, logical(1))
-  ]
-  if (length(nested_h5) >= 1L) {
-    ranked <- rank_h5_candidates(nested_h5, kind = kind)
-    if (length(nested_h5) > 1L) {
-      warning(
-        "Multiple nested ", kind, " .h5 inputs detected in ", base_dir,
-        "; using: ", nested_h5[ranked[1L]],
-        call. = FALSE
-      )
-    }
-    return(normalizePath(nested_h5[ranked[1L]], mustWork = TRUE))
-  }
-
-  NA_character_
-}
-
-candidate_base_dirs <- function(cellranger_dir, outs_subdir) {
-  primary <- if (nzchar(outs_subdir)) file.path(cellranger_dir, outs_subdir) else cellranger_dir
-
-  cands <- c(
-    primary,
-    if (basename(primary) == "outs") dirname(primary) else character(0),
-    file.path(cellranger_dir, "outs"),
-    file.path(cellranger_dir, "count"),
-    file.path(cellranger_dir, "count", "outs")
-  )
-
-  unique(normalizePath(cands, winslash = "/", mustWork = FALSE))
-}
-
-resolve_from_candidates <- function(cellranger_dir, outs_subdir, kind = c("filtered", "raw")) {
-  kind <- match.arg(kind)
-  cands <- candidate_base_dirs(cellranger_dir, outs_subdir)
-  for (base in cands) {
-    p <- resolve_matrix_dir(base, kind = kind)
-    if (!is.na(p)) return(p)
-  }
-  NA_character_
-}
-
 # ── Build per-sample path objects ──────────────────────────────────────────────
-samples$search_bases <- vapply(
-  samples$cellranger_dir,
-  function(d) paste(candidate_base_dirs(d, opt$outs_subdir), collapse = " | "),
-  FUN.VALUE = character(1)
-)
+samples$filtered_path <- samples$filtered_path
+samples$raw_path <- samples$raw_path
 
-samples$filtered_path <- vapply(
-  samples$cellranger_dir,
-  function(d) resolve_from_candidates(d, opt$outs_subdir, kind = "filtered"),
-  FUN.VALUE = character(1)
-)
-samples$raw_path <- vapply(
-  samples$cellranger_dir,
-  function(d) resolve_from_candidates(d, opt$outs_subdir, kind = "raw"),
-  FUN.VALUE = character(1)
-)
-
-# Fail fast for CellBender mode: filtered input must resolve before rendering.
-if (isTRUE(opt$use_cellbender)) {
-  missing_cb <- samples[is.na(samples$filtered_path), c("sample_name", "search_bases")]
-  if (nrow(missing_cb) > 0) {
-    detail <- apply(missing_cb, 1, function(x) {
-      paste0(x[["sample_name"]], " (searched bases: ", x[["search_bases"]], ")")
-    })
-    stop(
-      "--use_cellbender TRUE was set, but cellbender_filtered.h5/.hdf5 could not be resolved for:\n  ",
-      paste(detail, collapse = "\n  "),
-      "\nPlease place cellbender_filtered.h5 (or .hdf5) in one of the searched base directories for each sample.",
-      call. = FALSE
-    )
-  }
-}
-
-# Report resolved matrix inputs for transparency/debugging in job logs
-message("Resolved matrix inputs:")
+message("Matrix inputs:")
 for (i in seq_len(nrow(samples))) {
   message("  ", samples$sample_name[[i]])
   message("    filtered: ", samples$filtered_path[[i]])
   message("    raw     : ", samples$raw_path[[i]])
-}
-
-# Warn if any input paths are missing (don't abort; let render report the error)
-filtered_ok <- !is.na(samples$filtered_path) & vapply(samples$filtered_path, is_10x_input, logical(1))
-raw_ok <- !is.na(samples$raw_path) & vapply(samples$raw_path, is_10x_input, logical(1))
-missing_inputs <- samples[!(filtered_ok & raw_ok), c("sample_name", "search_bases")]
-if (nrow(missing_inputs) > 0) {
-  detail <- apply(missing_inputs, 1, function(x) {
-    paste0(x[["sample_name"]], " (searched bases: ", x[["search_bases"]], ")")
-  })
-  warning(
-    "Could not resolve filtered/raw matrix inputs for:\n  ",
-    paste(detail, collapse = "\n  "),
-    if (isTRUE(opt$use_cellbender)) "\nExpected filtered input: cellbender_filtered.h5 (or .hdf5)." else "",
-    call. = FALSE
-  )
 }
 
 # ── Create output directories ─────────────────────────────────────────────────

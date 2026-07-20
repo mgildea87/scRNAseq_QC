@@ -14,8 +14,8 @@ output:
 params:
   sample_name:      "Sample"
   batch:            "A"
-  filtered_path:    "filtered_feature_bc_matrix"
-  raw_path:         "raw_feature_bc_matrix"
+  filtered_path:    ""
+  raw_path:         ""
   use_cellbender:   FALSE
   support_dir:      "support_files"
   output_dir:       "."
@@ -146,7 +146,7 @@ Loads the CellRanger-filtered matrix for QC analysis and the unfiltered (raw) ma
 
 ```{r load-data}
 # Load either 10x MEX directories or 10x/CellBender .h5 files.
-# This pipeline assumes a single scRNA count matrix per input.
+# This pipeline assumes the sample sheet points directly at each matrix input.
 select_rna_counts <- function(x, label, input_path) {
   if (inherits(x, "dgCMatrix") || is.matrix(x)) {
     return(x)
@@ -181,6 +181,16 @@ read_10x_input <- function(input_path, label) {
     ". Expected a 10x MEX directory or an .h5/.hdf5 file.",
     call. = FALSE
   )
+}
+
+if (isTRUE(params$use_cellbender)) {
+  if (!file.exists(params$filtered_path) || !grepl("\\.(h5|hdf5)$", params$filtered_path, ignore.case = TRUE)) {
+    stop(
+      "--use_cellbender TRUE requires filtered_path to be a direct .h5 or .hdf5 file path (for example, cellbender_filtered.h5). Got: ",
+      params$filtered_path,
+      call. = FALSE
+    )
+  }
 }
 
 describe_loaded_files <- function(input_path) {

@@ -97,7 +97,8 @@ The sample sheet is a CSV file with the following columns:
 | Column | Required | Description |
 |--------|----------|-------------|
 | `sample_name` | Yes | Unique label used for output filenames |
-| `cellranger_dir` | Yes | Path to the CellRanger output directory (usually the folder that **contains** the `outs/` subfolder) |
+| `filtered_path` | Yes | Path to the filtered matrix directory or `.h5` file for that sample |
+| `raw_path` | Yes | Path to the raw matrix directory or `.h5` file for that sample |
 | `batch` | No | Batch label stored in the per-sample Seurat object metadata (defaults to `A` if omitted or blank) |
 | `min_nCount_RNA` | No | Hard lower bound on UMI count per cell |
 | `max_nCount_RNA` | No | Hard upper bound on UMI count per cell |
@@ -118,19 +119,21 @@ The MAD defaults are:
 ### Example
 
 ```csv
-sample_name,cellranger_dir,batch,min_nCount_RNA,max_nCount_RNA,min_nFeature_RNA,max_nFeature_RNA,max_percent_mt,min_malat1
-Control_1,/path/to/cellranger/count-Control-1,A,NA,NA,NA,NA,NA,1
-Treatment_1,/path/to/cellranger/count-Treatment-1,A,500,25000,250,6000,20,1
+sample_name,filtered_path,raw_path,batch,min_nCount_RNA,max_nCount_RNA,min_nFeature_RNA,max_nFeature_RNA,max_percent_mt,min_malat1
+Control_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A,NA,NA,NA,NA,NA,1
+Treatment_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A,500,25000,250,6000,20,1
 ```
 
 `Control_1` uses all MAD-based defaults. `Treatment_1` uses hardcoded thresholds.
 
-Matrix inputs are auto-detected from the chosen base directory.
+For `.h5` inputs, `filtered_path` and `raw_path` must point to the file itself, not the folder that contains it. For 10x MEX inputs, the path must point to the matrix directory that contains `matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and `features.tsv(.gz)` or `genes.tsv(.gz)`.
+
+Matrix inputs are no longer auto-detected from a parent directory. Each sample must provide direct paths to the filtered and raw matrix inputs.
 Supported input formats:
 
 - 10x MEX directories containing `matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and
   `features.tsv(.gz)` or `genes.tsv(.gz)`
-- 10x-style `.h5` or `.hdf5` files (standard mode uses `filtered` / `raw` filename matching; CellBender filtered input is selected explicitly via `--use_cellbender TRUE` and `cellbender_filtered.h5`/`.hdf5`)
+- 10x-style `.h5` or `.hdf5` files
 
 For `.h5` inputs, the QC template currently expects one scRNA matrix per file.
 CellBender filtered input is opt-in via `--use_cellbender TRUE`.
@@ -227,7 +230,7 @@ rmarkdown::render(
   )
 )
 
-# Example: .h5 inputs (including CellBender outputs)
+# Example: .h5 inputs (including CellBender outputs). Pass the .h5 file path itself.
 rmarkdown::render(
   "sample_QC.Rmd",
   params = list(
@@ -277,8 +280,7 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 |------|---------|-------------|
 | `--sample_sheet` | *(required)* | Absolute path to CSV sample sheet |
 | `--output_dir` | `QC` | Directory for HTML reports, RDS files, and logs |
-| `--outs_subdir` | `outs` | Subdirectory inside `cellranger_dir` used as the search base for filtered/raw matrix folders. Set to `""` if `cellranger_dir` already points to the base directory containing those folders |
-| `--use_cellbender` | `FALSE` | If `TRUE`, filtered input must resolve to `cellbender_filtered.h5` (or `.hdf5`); if `FALSE`, standard filtered matrix autodetection is used |
+| `--use_cellbender` | `FALSE` | If `TRUE`, filtered input must resolve to `cellbender_filtered.h5` (or `.hdf5`) |
 | `--mem` | `32` | Memory per job in GB |
 | `--merge_mem` | `64` | Memory for the merge job in GB |
 | `--integration_mem` | `64` | Memory for the integration job in GB |
