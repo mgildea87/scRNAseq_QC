@@ -1192,7 +1192,7 @@ Two-dimensional UMAP embeddings for RNA (log-normalised) and SCTransform workflo
 
 ```{r umap-plot}
 DimPlot(seurat, reduction = 'umap_rna', group.by = 'seurat_clusters_rna', label = TRUE, repel = TRUE) +
-  ggtitle('UMAP (RNA normalisation)')
+  ggtitle('UMAP (LogNormalize method)')
 
 DimPlot(seurat, reduction = 'umap_sct', group.by = 'seurat_clusters_sct', label = TRUE, repel = TRUE) +
   ggtitle('UMAP (SCTransform normalisation)')
@@ -1326,7 +1326,7 @@ plot_method_modularity(
   seurat,
   graph_name = 'RNA_snn',
   cluster_col = 'seurat_clusters_rna',
-  method_label = 'RNA'
+  method_label = 'LogNormalize method'
 )
 
 plot_method_modularity(
@@ -1340,7 +1340,7 @@ plot_method_modularity(
 # QC metrics across clusters by normalisation method
 Projects log-scale UMI count and gene count onto each UMAP and visualises QC metric distributions by method-specific cluster labels.
 
-```{r qc-by-cluster}
+```{r qc-by-cluster, fig.height=7, fig.width=10}
 # Log-scale QC metrics projected onto RNA and SCT UMAPs and split by
 # method-specific cluster identities.
 seurat$nCount_RNA_log   <- log10(seurat$nCount_RNA)
@@ -1524,6 +1524,7 @@ build_top_marker_heatmap <- function(
     mat,
     scale = 'row',
     color = myColor,
+    border_color = NULL,
     breaks = myBreaks,
     fontsize = 6,
     main = title_text
@@ -1542,7 +1543,7 @@ build_top_marker_heatmap(
   cluster_col = 'seurat_clusters_rna',
   assay_name = 'RNA',
   layer_name = 'data',
-  title_text = 'Top marker heatmap (RNA normalisation)'
+  title_text = 'Top marker heatmap (LogNormalize method)'
 )
 
 build_top_marker_heatmap(
