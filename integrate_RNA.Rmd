@@ -19,8 +19,12 @@ params:
   integration_level: "Batch"
   lisi_rds_path: "lisi_integrated_RNA.rds"
   lisi_sct_rds_path: "lisi_integrated_SCT.rds"
-  markers_csv_path: "FindMarkersBulk_RNA_integrated/Top_markers.csv"
-  markers_sct_csv_path: "FindMarkersBulk_SCT_integrated/Top_markers.csv"
+  lisi_harmony_rds_path: "lisi_integrated_RNA_harmony.rds"
+  lisi_sct_harmony_rds_path: "lisi_integrated_SCT_harmony.rds"
+  markers_csv_path: "FindMarkersBulk_RNA_integrated_rpca/Top_markers.csv"
+  markers_sct_csv_path: "FindMarkersBulk_SCT_integrated_rpca/Top_markers.csv"
+  markers_harmony_csv_path: "FindMarkersBulk_RNA_integrated_harmony/Top_markers.csv"
+  markers_sct_harmony_csv_path: "FindMarkersBulk_SCT_integrated_harmony/Top_markers.csv"
 ---
 
 <style type="text/css">
@@ -50,11 +54,6 @@ Environment context: print working directory used during render.
 cat(paste('Bigpurple Location: ',getwd()))
 ```
 
-Environment package snapshot: attempt to print conda package list for debugging.
-```{r conda-package-list}
-try(system('conda list'), silent = TRUE)
-```
-
 Load required R packages for integration, plotting, and diagnostics.
 ```{r load-libraries, message=F, warning=F}
 library(Seurat)
@@ -62,6 +61,7 @@ library(ggplot2)
 library(pheatmap)
 library(lisi)
 library(CVRCFunc)
+library(harmony)
 ```
 
 Parameter validation: check integration level and resolve output paths.
@@ -81,6 +81,10 @@ lisi_rds_path <- resolve_output_path(params$lisi_rds_path)
 markers_csv_path <- resolve_output_path(params$markers_csv_path)
 lisi_sct_rds_path <- resolve_output_path(params$lisi_sct_rds_path)
 markers_sct_csv_path <- resolve_output_path(params$markers_sct_csv_path)
+lisi_harmony_rds_path <- resolve_output_path(params$lisi_harmony_rds_path)
+markers_harmony_csv_path <- resolve_output_path(params$markers_harmony_csv_path)
+lisi_sct_harmony_rds_path <- resolve_output_path(params$lisi_sct_harmony_rds_path)
+markers_sct_harmony_csv_path <- resolve_output_path(params$markers_sct_harmony_csv_path)
 ```
 
 Track run progress by logging each code chunk as it starts, with timestamps.
@@ -149,35 +153,78 @@ seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = "RNA_integrated
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'integrated.rpca', reduction.name = 'UMAP_RNA_integrated')
 ```
 
-SCT integration workflow: apply SCTransform, split by integration level, perform CCA integration, and save.
+SCT integration workflow: apply SCTransform, perform rpca integration, and save.
 ```{r integrate-sct, warning=F, message=F }
 print(paste('Applying SCTransform and integrating SCT at level:', params$integration_level))
 options(future.globals.maxSize = 8000 * 1024^8)
 
 # Create a copy for SCT analysis
-seurat_sct <- seurat
-
-# Apply SCT normalization
-seurat_sct <- SCTransform(seurat_sct, assay = 'RNA', new.assay.name = 'SCT', verbose = FALSE)
-
-# Split SCT layers by integration group
-seurat_sct[["SCT"]] <- split(
-  seurat_sct[["SCT"]],
-  f = seurat_sct@meta.data[[integration_group_column]]
-)
-
-# Perform RPCA integration on SCT assay
-seurat_sct <- RunPCA(seurat_sct, assay = 'SCT', reduction.name = 'PCA_SCT_split')
-seurat_sct <- IntegrateLayers(object = seurat_sct, method = RPCAIntegration, orig.reduction = "PCA_SCT_split", new.reduction = "integrated.rpca.sct", verbose = FALSE, assay = 'SCT')
-seurat_sct <- FindNeighbors(seurat_sct, reduction = "integrated.rpca.sct", dims = 1:30, assay = 'SCT')
-seurat_sct <- FindClusters(seurat_sct, resolution = 0.75, cluster.name = "SCT_integrated_clusters_0.75", algorithm = 4)
-seurat_sct <- RunUMAP(seurat_sct, dims = 1:30, reduction = 'integrated.rpca.sct', reduction.name = 'UMAP_SCT_integrated', assay = 'SCT')
-saveRDS(seurat_sct, file = params$integrated_sct_rds_path)
+DefaultAssay(seurat) <- "SCT"
+seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_split', row.names(seurat@assays$SCT$scale.data))
+seurat <- IntegrateLayers(object = seurat, method = RPCAIntegration, orig.reduction = "PCA_SCT_split", new.reduction = "integrated.rpca.sct",verbose = FALSE, assay = 'SCT', normalization.method = "SCT")
+seurat <- FindNeighbors(seurat, reduction = "integrated.rpca.sct", dims = 1:30)
+seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = "SCT_integrated_clusters_0.75", algorithm = 4)
+seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'integrated.rpca.sct', reduction.name = 'UMAP_SCT_integrated')
 ```
 
-# UMAP plots
+Harmony workflow (log-normalized RNA): run Harmony on RNA PCA, then cluster and UMAP.
+```{r integrate-log-norm-harmony, warning=F, message=F }
+print(paste('Running Harmony on RNA at level:', params$integration_level))
+DefaultAssay(seurat) <- 'RNA'
+seurat <- RunHarmony(
+  object = seurat,
+  group.by.vars = integration_group_column,
+  reduction = 'PCA_RNA_split',
+  assay.use = 'RNA',
+  reduction.save = 'harmony.rna',
+  verbose = FALSE
+)
+seurat <- FindNeighbors(seurat, reduction = 'harmony.rna', dims = 1:30)
+seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = 'RNA_harmony_clusters_0.75', algorithm = 4)
+seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'harmony.rna', reduction.name = 'UMAP_RNA_harmony')
+```
+
+Harmony workflow (SCT): run Harmony on SCT PCA, then cluster and UMAP.
+```{r integrate-sct-harmony, warning=F, message=F }
+print(paste('Running Harmony on SCT at level:', params$integration_level))
+DefaultAssay(seurat) <- 'SCT'
+seurat <- RunHarmony(
+  object = seurat,
+  group.by.vars = integration_group_column,
+  reduction = 'PCA_SCT_split',
+  assay.use = 'SCT',
+  reduction.save = 'harmony.sct',
+  verbose = FALSE
+)
+seurat <- FindNeighbors(seurat, reduction = 'harmony.sct', dims = 1:30, assay = 'SCT')
+seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = 'SCT_harmony_clusters_0.75', algorithm = 4)
+seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'harmony.sct', reduction.name = 'UMAP_SCT_harmony', assay = 'SCT')
+```
+
+Save all integration outputs with RPCA and Harmony reductions/clusters.
+```{r save-integrated-objects, warning=F, message=F }
+saveRDS(seurat, file = params$integrated_rds_path)
+saveRDS(seurat, file = params$integrated_sct_rds_path)
+```
+
+# LogNormalize RPCA integration analysis
 ## Dim reduction plots
 Visual overview: plot integrated UMAP colored by sample_name, batch, and cluster identity.
+
+### PCA plots
+```{r integrated-pca-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+
+Idents(seurat) <- 'sample_name'
+DimPlot(seurat, reduction = 'PCA_RNA_split', raster = F)
+
+Idents(seurat) <- 'batch'
+DimPlot(seurat, reduction = 'PCA_RNA_split', raster = F)
+
+Idents(seurat) <- 'RNA_integrated_clusters_0.75'
+DimPlot(seurat, reduction = 'PCA_RNA_split', raster = F)
+```
+
+### UMAP plots
 ```{r integrated-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
 
 Idents(seurat) <- 'sample_name'
@@ -208,20 +255,21 @@ ggplot(prop_table, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxplot()
 ```
 
 ## LISI
-LISI computation: calculate batch mixing scores from integrated embeddings and save to disk.
+LISI computation: calculate mixing scores for the selected integration level from integrated embeddings and save to disk.
 ```{r compute-lisi, eval = T, warning=F, message=F }
 pca <- seurat@reductions$integrated.rpca@cell.embeddings
-lisi <- compute_lisi(pca[,c(1:30)], seurat@meta.data, label_colnames = c('batch'))
+lisi <- compute_lisi(pca[,c(1:30)], seurat@meta.data, label_colnames = c(integration_group_column))
 saveRDS(lisi, file = lisi_rds_path)
 ```
 
-LISI visualization: plot distributions and spatial patterns of batch mixing scores.
+LISI visualization: plot distributions and spatial patterns of mixing scores for the selected integration level.
 ```{r plot-lisi, fig.height=5, fig.width=7, warning=F, message=F, eval = T}
 lisi <- readRDS(lisi_rds_path)
-seurat$lisi_batch <- lisi$batch
-hist(lisi$batch, breaks = 200)
-FeaturePlot(seurat, features = 'lisi_batch', raster = F, reduction = 'UMAP_RNA_integrated')
-VlnPlot(seurat, features = 'lisi_batch', pt.size = 0)+NoLegend()
+lisi_feature_name <- paste0('lisi_', integration_group_column)
+seurat[[lisi_feature_name]] <- lisi[[integration_group_column]]
+hist(lisi[[integration_group_column]], breaks = 200, main = paste('Integrated RNA LISI -', integration_group_column))
+FeaturePlot(seurat, features = lisi_feature_name, raster = F, reduction = 'UMAP_RNA_integrated')
+VlnPlot(seurat, features = lisi_feature_name, pt.size = 0)+NoLegend()
 ```
 
 ## QC metrics
@@ -237,7 +285,7 @@ VlnPlot(seurat, features = 'Malat1', pt.size = 0)+NoLegend()
 Marker discovery: run bulk-style marker analysis across integrated clusters.
 ```{r find-cluster-markers, eval = T, warning=F, message=F}
 seurat <- JoinLayers(seurat, assay = 'RNA')
-FindMarkersBulk(seurat, clus_ident = 'RNA_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated')
+FindMarkersBulk(seurat, clus_ident = 'RNA_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated_rpca')
 ```
 
 ### Top marker heatmap RNA
@@ -260,29 +308,42 @@ if (!file.exists(markers_csv_path)) {
 }
 ```
 
-# SCT Integration Analysis
+# SCT RPCA Integration Analysis
 
-## SCT UMAP plots
-### Dim reduction plots
+## Dim reduction plots
 Visual overview: plot SCT-integrated UMAP colored by sample_name, batch, and cluster identity.
-```{r sct-integrated-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
 
-Idents(seurat_sct) <- 'sample_name'
-DimPlot(seurat_sct, reduction = 'UMAP_SCT_integrated', raster = F)
+### PCA plots
+```{r integrated-sct-pca-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
 
-Idents(seurat_sct) <- 'batch'
-DimPlot(seurat_sct, reduction = 'UMAP_SCT_integrated', raster = F)
+Idents(seurat) <- 'sample_name'
+DimPlot(seurat, reduction = 'PCA_SCT_split', raster = F)
 
-Idents(seurat_sct) <- 'SCT_integrated_clusters_0.75'
-DimPlot(seurat_sct, reduction = 'UMAP_SCT_integrated', raster = F)
+Idents(seurat) <- 'batch'
+DimPlot(seurat, reduction = 'PCA_SCT_split', raster = F)
+
+Idents(seurat) <- 'SCT_integrated_clusters_0.75'
+DimPlot(seurat, reduction = 'PCA_SCT_split', raster = F)
 ```
 
-### Abundance
+```{r sct-integrated-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+
+Idents(seurat) <- 'sample_name'
+DimPlot(seurat, reduction = 'UMAP_SCT_integrated', raster = F)
+
+Idents(seurat) <- 'batch'
+DimPlot(seurat, reduction = 'UMAP_SCT_integrated', raster = F)
+
+Idents(seurat) <- 'SCT_integrated_clusters_0.75'
+DimPlot(seurat, reduction = 'UMAP_SCT_integrated', raster = F)
+```
+
+## Abundance
 
 Cluster composition: compute and visualize per-sample and per-batch abundance distributions for SCT integration.
 ```{r sct-cluster-abundance-plots, fig.height=6, fig.width=16, warning=F, message=F, eval = T}
-prop_table_sct <- as.data.frame(prop.table(table(seurat_sct$sample_name, seurat_sct$SCT_integrated_clusters_0.75), margin = 1))
-sample_batch_map <- unique(seurat_sct@meta.data[, c('sample_name', 'batch')])
+prop_table_sct <- as.data.frame(prop.table(table(seurat$sample_name, seurat$SCT_integrated_clusters_0.75), margin = 1))
+sample_batch_map <- unique(seurat@meta.data[, c('sample_name', 'batch')])
 sample_batch_map$sample_name <- as.character(sample_batch_map$sample_name)
 prop_table_sct$batch <- sample_batch_map$batch[match(as.character(prop_table_sct$Var1), sample_batch_map$sample_name)]
 ggplot(prop_table_sct, aes(y = Freq, x = Var2, color = Var1))+geom_point()+theme_classic()
@@ -294,40 +355,40 @@ ggplot(prop_table_sct, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxpl
   ylab('log10(Frequency)')
 ```
 
-### LISI
-LISI computation: calculate batch mixing scores from SCT-integrated embeddings and save to disk.
+## LISI
+LISI computation: calculate mixing scores for the selected integration level from SCT-integrated embeddings and save to disk.
 ```{r compute-lisi-sct, eval = T, warning=F, message=F }
-pca_sct <- seurat_sct@reductions$integrated.rpca.sct@cell.embeddings
-lisi_sct <- compute_lisi(pca_sct[,c(1:30)], seurat_sct@meta.data, label_colnames = c('batch'))
+pca_sct <- seurat@reductions$integrated.rpca.sct@cell.embeddings
+lisi_sct <- compute_lisi(pca_sct[,c(1:30)], seurat@meta.data, label_colnames = c(integration_group_column))
 saveRDS(lisi_sct, file = lisi_sct_rds_path)
 ```
 
-LISI visualization: plot distributions and spatial patterns of batch mixing scores for SCT integration.
+LISI visualization: plot distributions and spatial patterns of mixing scores for the selected integration level for SCT integration.
 ```{r plot-lisi-sct, fig.height=5, fig.width=7, warning=F, message=F, eval = T}
 lisi_sct <- readRDS(lisi_sct_rds_path)
-seurat_sct$lisi_batch <- lisi_sct$batch
-hist(lisi_sct$batch, breaks = 200)
-FeaturePlot(seurat_sct, features = 'lisi_batch', raster = F, reduction = 'UMAP_SCT_integrated')
-VlnPlot(seurat_sct, features = 'lisi_batch', pt.size = 0)+NoLegend()
+lisi_feature_name <- paste0('lisi_', integration_group_column)
+seurat[[lisi_feature_name]] <- lisi_sct[[integration_group_column]]
+hist(lisi_sct[[integration_group_column]], breaks = 200, main = paste('Integrated SCT LISI -', integration_group_column))
+FeaturePlot(seurat, features = lisi_feature_name, raster = F, reduction = 'UMAP_SCT_integrated')
+VlnPlot(seurat, features = lisi_feature_name, pt.size = 0)+NoLegend()
 ```
 
-### QC metrics
+## QC metrics
 QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 distributions for SCT integration.
 ```{r sct-qc-metric-violins, fig.height=6, fig.width=12, warning=F, message=F, eval = T}
-VlnPlot(seurat_sct, features = 'nCount_RNA', pt.size = 0)+NoLegend()
-VlnPlot(seurat_sct, features = 'nFeature_RNA', pt.size = 0)+NoLegend()
-VlnPlot(seurat_sct, features = 'percent.mt', pt.size = 0)+NoLegend()
-VlnPlot(seurat_sct, features = 'Malat1', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'percent.mt', pt.size = 0)+NoLegend()
+VlnPlot(seurat, features = 'Malat1', pt.size = 0)+NoLegend()
 ```
 
-### Differential expression (cluster markers)
+## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across SCT-integrated clusters.
 ```{r find-cluster-markers-sct, eval = T, warning=F, message=F}
-seurat_sct <- JoinLayers(seurat_sct, assay = 'SCT')
-FindMarkersBulk(seurat_sct, clus_ident = 'SCT_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'SCT', out_dir = 'FindMarkersBulk_SCT_integrated')
+FindMarkersBulk(seurat, clus_ident = 'SCT_integrated_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'SCT', out_dir = 'FindMarkersBulk_SCT_integrated_rpca')
 ```
 
-### Top marker heatmap SCT
+## Top marker heatmap SCT
 Marker heatmap: render scaled average expression heatmap for top SCT markers when available.
 ```{r marker-heatmap-sct, fig.height=24, fig.width=5, warning=F, message=F, eval = T}
 paletteLength <- 50
@@ -340,10 +401,267 @@ if (!file.exists(markers_sct_csv_path)) {
 } else {
   markers <- read.csv(markers_sct_csv_path)
   markers <- markers$x
-  avg_exp <- AverageExpression(seurat_sct, assays = 'SCT', features = markers, group.by = 'SCT_integrated_clusters_0.75')
+  avg_exp <- AverageExpression(seurat, assays = 'SCT', features = markers, group.by = 'SCT_integrated_clusters_0.75')
   avg_exp <- avg_exp$SCT
   mat <- t(scale(t(avg_exp)))
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
+}
+```
+
+# LogNormalize Harmony Integration Analysis
+## Dim reduction plots
+Visual overview: plot Harmony-integrated RNA UMAP colored by sample_name, batch, and cluster identity.
+
+### UMAP plots
+```{r harmony-rna-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+
+Idents(seurat) <- 'sample_name'
+DimPlot(seurat, reduction = 'UMAP_RNA_harmony', raster = F)
+
+Idents(seurat) <- 'batch'
+DimPlot(seurat, reduction = 'UMAP_RNA_harmony', raster = F)
+
+Idents(seurat) <- 'RNA_harmony_clusters_0.75'
+DimPlot(seurat, reduction = 'UMAP_RNA_harmony', raster = F)
+```
+
+## Abundance
+
+Cluster composition: compute and visualize per-sample and per-batch abundance distributions for RNA Harmony integration.
+```{r harmony-rna-cluster-abundance-plots, fig.height=6, fig.width=16, warning=F, message=F, eval = T}
+prop_table_harmony <- as.data.frame(prop.table(table(seurat$sample_name, seurat$RNA_harmony_clusters_0.75), margin = 1))
+sample_batch_map <- unique(seurat@meta.data[, c('sample_name', 'batch')])
+sample_batch_map$sample_name <- as.character(sample_batch_map$sample_name)
+prop_table_harmony$batch <- sample_batch_map$batch[match(as.character(prop_table_harmony$Var1), sample_batch_map$sample_name)]
+ggplot(prop_table_harmony, aes(y = Freq, x = Var2, color = Var1))+geom_point()+theme_classic()
+ggplot(prop_table_harmony, aes(y = Freq, x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('Frequency')
+ggplot(prop_table_harmony, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('log10(Frequency)')
+```
+
+## LISI
+LISI computation: calculate mixing scores for the selected integration level from Harmony RNA embeddings and save to disk.
+```{r compute-lisi-harmony-rna, eval = T, warning=F, message=F }
+pca_harmony_rna <- seurat@reductions$harmony.rna@cell.embeddings
+lisi_harmony <- compute_lisi(pca_harmony_rna[,c(1:30)], seurat@meta.data, label_colnames = c(integration_group_column))
+saveRDS(lisi_harmony, file = lisi_harmony_rds_path)
+```
+
+LISI visualization: plot distributions and spatial patterns of mixing scores for RNA Harmony integration.
+```{r plot-lisi-harmony-rna, fig.height=5, fig.width=7, warning=F, message=F, eval = T}
+lisi_harmony <- readRDS(lisi_harmony_rds_path)
+lisi_feature_name_harmony <- paste0('lisi_harmony_rna_', integration_group_column)
+seurat[[lisi_feature_name_harmony]] <- lisi_harmony[[integration_group_column]]
+hist(lisi_harmony[[integration_group_column]], breaks = 200, main = paste('Harmony RNA LISI -', integration_group_column))
+FeaturePlot(seurat, features = lisi_feature_name_harmony, raster = F, reduction = 'UMAP_RNA_harmony')
+VlnPlot(seurat, features = lisi_feature_name_harmony, pt.size = 0)+NoLegend()
+```
+
+## QC metrics
+QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 distributions for RNA Harmony integration.
+```{r harmony-rna-qc-metric-violins, fig.height=6, fig.width=12, warning=F, message=F, eval = T}
+VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
+VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
+VlnPlot(seurat, features = 'percent.mt', pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
+VlnPlot(seurat, features = 'Malat1', pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
+```
+
+## Differential expression (cluster markers)
+Marker discovery: run bulk-style marker analysis across RNA Harmony clusters.
+```{r find-cluster-markers-harmony-rna, eval = T, warning=F, message=F}
+seurat <- JoinLayers(seurat, assay = 'RNA')
+FindMarkersBulk(seurat, clus_ident = 'RNA_harmony_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated_harmony')
+```
+
+## Top marker heatmap RNA Harmony
+Marker heatmap: render scaled average expression heatmap for top RNA Harmony markers when available.
+```{r marker-heatmap-harmony-rna, fig.height=24, fig.width=5, warning=F, message=F, eval = T}
+paletteLength <- 50
+myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+myBreaks <- c(seq(-3, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(3/paletteLength, 3, length.out=floor(paletteLength/2)))
+if (!file.exists(markers_harmony_csv_path)) {
+  message('Skipping RNA Harmony marker heatmap because markers file was not found: ', markers_harmony_csv_path)
+} else {
+  markers <- read.csv(markers_harmony_csv_path)
+  markers <- markers$x
+  avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'RNA_harmony_clusters_0.75')
+  avg_exp <- avg_exp$RNA
+  mat <- t(scale(t(avg_exp)))
+  pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
+}
+```
+
+# SCT Harmony Integration Analysis
+## Dim reduction plots
+Visual overview: plot SCT Harmony-integrated UMAP colored by sample_name, batch, and cluster identity.
+```{r harmony-sct-umap-plots, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+
+Idents(seurat) <- 'sample_name'
+DimPlot(seurat, reduction = 'UMAP_SCT_harmony', raster = F)
+
+Idents(seurat) <- 'batch'
+DimPlot(seurat, reduction = 'UMAP_SCT_harmony', raster = F)
+
+Idents(seurat) <- 'SCT_harmony_clusters_0.75'
+DimPlot(seurat, reduction = 'UMAP_SCT_harmony', raster = F)
+```
+
+## Abundance
+
+Cluster composition: compute and visualize per-sample and per-batch abundance distributions for SCT Harmony integration.
+```{r harmony-sct-cluster-abundance-plots, fig.height=6, fig.width=16, warning=F, message=F, eval = T}
+prop_table_sct_harmony <- as.data.frame(prop.table(table(seurat$sample_name, seurat$SCT_harmony_clusters_0.75), margin = 1))
+sample_batch_map <- unique(seurat@meta.data[, c('sample_name', 'batch')])
+sample_batch_map$sample_name <- as.character(sample_batch_map$sample_name)
+prop_table_sct_harmony$batch <- sample_batch_map$batch[match(as.character(prop_table_sct_harmony$Var1), sample_batch_map$sample_name)]
+ggplot(prop_table_sct_harmony, aes(y = Freq, x = Var2, color = Var1))+geom_point()+theme_classic()
+ggplot(prop_table_sct_harmony, aes(y = Freq, x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('Frequency')
+ggplot(prop_table_sct_harmony, aes(y = log10(Freq), x = Var2, color = batch))+geom_boxplot()+geom_point(position = position_jitterdodge(dodge.width = .7, jitter.width = .1))+theme_classic()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1))+
+  ylab('log10(Frequency)')
+```
+
+## LISI
+LISI computation: calculate mixing scores for the selected integration level from Harmony SCT embeddings and save to disk.
+```{r compute-lisi-harmony-sct, eval = T, warning=F, message=F }
+pca_harmony_sct <- seurat@reductions$harmony.sct@cell.embeddings
+lisi_sct_harmony <- compute_lisi(pca_harmony_sct[,c(1:30)], seurat@meta.data, label_colnames = c(integration_group_column))
+saveRDS(lisi_sct_harmony, file = lisi_sct_harmony_rds_path)
+```
+
+LISI visualization: plot distributions and spatial patterns of mixing scores for SCT Harmony integration.
+```{r plot-lisi-harmony-sct, fig.height=5, fig.width=7, warning=F, message=F, eval = T}
+lisi_sct_harmony <- readRDS(lisi_sct_harmony_rds_path)
+lisi_feature_name_sct_harmony <- paste0('lisi_harmony_sct_', integration_group_column)
+seurat[[lisi_feature_name_sct_harmony]] <- lisi_sct_harmony[[integration_group_column]]
+hist(lisi_sct_harmony[[integration_group_column]], breaks = 200, main = paste('Harmony SCT LISI -', integration_group_column))
+FeaturePlot(seurat, features = lisi_feature_name_sct_harmony, raster = F, reduction = 'UMAP_SCT_harmony')
+VlnPlot(seurat, features = lisi_feature_name_sct_harmony, pt.size = 0)+NoLegend()
+```
+
+## QC metrics
+QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 distributions for SCT Harmony integration.
+```{r harmony-sct-qc-metric-violins, fig.height=6, fig.width=12, warning=F, message=F, eval = T}
+VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
+VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
+VlnPlot(seurat, features = 'percent.mt', pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
+VlnPlot(seurat, features = 'Malat1', pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
+```
+
+## Differential expression (cluster markers)
+Marker discovery: run bulk-style marker analysis across SCT Harmony clusters.
+```{r find-cluster-markers-harmony-sct, eval = T, warning=F, message=F}
+FindMarkersBulk(seurat, clus_ident = 'SCT_harmony_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'SCT', out_dir = 'FindMarkersBulk_SCT_integrated_harmony')
+```
+
+## Top marker heatmap SCT Harmony
+Marker heatmap: render scaled average expression heatmap for top SCT Harmony markers when available.
+```{r marker-heatmap-harmony-sct, fig.height=24, fig.width=5, warning=F, message=F, eval = T}
+paletteLength <- 50
+myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+myBreaks <- c(seq(-3, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(3/paletteLength, 3, length.out=floor(paletteLength/2)))
+if (!file.exists(markers_sct_harmony_csv_path)) {
+  message('Skipping SCT Harmony marker heatmap because markers file was not found: ', markers_sct_harmony_csv_path)
+} else {
+  markers <- read.csv(markers_sct_harmony_csv_path)
+  markers <- markers$x
+  avg_exp <- AverageExpression(seurat, assays = 'SCT', features = markers, group.by = 'SCT_harmony_clusters_0.75')
+  avg_exp <- avg_exp$SCT
+  mat <- t(scale(t(avg_exp)))
+  pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
+}
+```
+
+# Cross-method LISI comparison
+Compare LISI distributions across all four integration methods for the selected integration level.
+
+```{r compare-lisi-across-methods, fig.height=7, fig.width=12, warning=F, message=F, eval = T}
+read_lisi_column <- function(path, label_col, method_name) {
+  if (!file.exists(path)) {
+    message('Skipping ', method_name, ': LISI file not found at ', path)
+    return(NULL)
+  }
+
+  obj <- readRDS(path)
+  if (!(label_col %in% colnames(obj))) {
+    message('Skipping ', method_name, ': LISI column ', label_col, ' not found in ', path)
+    return(NULL)
+  }
+
+  data.frame(
+    method = method_name,
+    lisi = as.numeric(obj[[label_col]]),
+    stringsAsFactors = FALSE
+  )
+}
+
+lisi_tables <- list(
+  read_lisi_column(lisi_rds_path, integration_group_column, 'RNA RPCA'),
+  read_lisi_column(lisi_sct_rds_path, integration_group_column, 'SCT RPCA'),
+  read_lisi_column(lisi_harmony_rds_path, integration_group_column, 'RNA Harmony'),
+  read_lisi_column(lisi_sct_harmony_rds_path, integration_group_column, 'SCT Harmony')
+)
+lisi_tables <- lisi_tables[!vapply(lisi_tables, is.null, logical(1))]
+
+if (length(lisi_tables) < 2L) {
+  message('Need at least two LISI result tables to compare methods. Skipping cross-method LISI comparison.')
+} else {
+  lisi_compare <- do.call(rbind, lisi_tables)
+  lisi_compare <- lisi_compare[is.finite(lisi_compare$lisi), , drop = FALSE]
+  lisi_compare$method <- factor(
+    lisi_compare$method,
+    levels = c('RNA RPCA', 'SCT RPCA', 'RNA Harmony', 'SCT Harmony')
+  )
+  lisi_compare <- lisi_compare[!is.na(lisi_compare$method), , drop = FALSE]
+
+  if (nrow(lisi_compare) == 0) {
+    message('No finite LISI values available for cross-method comparison.')
+  } else {
+    summary_df <- do.call(rbind, lapply(split(lisi_compare$lisi, lisi_compare$method), function(x) {
+      data.frame(
+        n_cells = length(x),
+        mean = mean(x),
+        median = median(x),
+        sd = sd(x),
+        iqr = IQR(x),
+        q05 = as.numeric(quantile(x, 0.05)),
+        q95 = as.numeric(quantile(x, 0.95))
+      )
+    }))
+    summary_df$method <- rownames(summary_df)
+    rownames(summary_df) <- NULL
+    summary_df <- summary_df[, c('method', 'n_cells', 'mean', 'median', 'sd', 'iqr', 'q05', 'q95')]
+    print(summary_df)
+
+    print(
+      ggplot(lisi_compare, aes(x = method, y = lisi, fill = method)) +
+        geom_violin(trim = FALSE, alpha = 0.35, color = NA) +
+        geom_boxplot(width = 0.15, outlier.size = 0.15, alpha = 0.8) +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1), legend.position = 'none') +
+        xlab('Integration method') +
+        ylab(paste('LISI (', integration_group_column, ')', sep = '')) +
+        ggtitle(paste('LISI comparison across integration methods -', integration_group_column))
+    )
+
+    print(
+      ggplot(summary_df, aes(x = method, y = median, fill = method)) +
+        geom_col(alpha = 0.8) +
+        geom_errorbar(aes(ymin = q05, ymax = q95), width = 0.2) +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1), legend.position = 'none') +
+        xlab('Integration method') +
+        ylab(paste('Median LISI (', integration_group_column, ') with 5th-95th percentile', sep = '')) +
+        ggtitle('Median LISI summary across methods')
+    )
+  }
 }
 ```
 

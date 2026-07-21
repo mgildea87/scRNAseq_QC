@@ -161,7 +161,7 @@ if (need_sct_reduction || need_sct_clusters) {
   message('Computing merged SCTransform reductions/clusters...')
   set.seed(1234)
   DefaultAssay(seurat) <- 'SCT'
-  seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_merged')
+  seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_merged', features = row.names(seurat@assays$SCT))
   seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_SCT_merged', assay = 'SCT', reduction.name = 'UMAP_SCT_merged')
   seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_merged', dims = c(1:30))
   seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'seurat_clusters_sct_merged')
@@ -332,7 +332,7 @@ for (feature_name in qc_features) {
 # Differential expression (cluster markers)
 Run pseudobulk-style cluster marker discovery for log-norm and SCT cluster labels.
 ```{r differential-expression-markers, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_log_norm')
+FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNotmalize')
 FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_sct_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
 ```
 
