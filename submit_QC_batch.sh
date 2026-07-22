@@ -508,12 +508,12 @@ echo "Finished : \$(date)"
 
 MERGED_QC_RDS="${OUTPUT_DIR}/merged_QC.rds"
 MERGE_HTML="${OUTPUT_DIR}/merge_analysis.html"
-if [[ ! -f "${MERGED_QC_RDS}" ]]; then
-  echo "ERROR: merged output missing after merge job: ${MERGED_QC_RDS}" >&2
+if [[ ! -f "\${MERGED_QC_RDS}" ]]; then
+  echo "ERROR: merged output missing after merge job: \${MERGED_QC_RDS}" >&2
   exit 1
 fi
-if [[ -f "${TEMPLATE_DIR}/merge_analysis.Rmd" && ! -f "${MERGE_HTML}" ]]; then
-  echo "ERROR: merge report missing after merge job: ${MERGE_HTML}" >&2
+if [[ -f "${TEMPLATE_DIR}/merge_analysis.Rmd" && ! -f "\${MERGE_HTML}" ]]; then
+  echo "ERROR: merge report missing after merge job: \${MERGE_HTML}" >&2
   exit 1
 fi
 
