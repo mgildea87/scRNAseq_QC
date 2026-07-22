@@ -27,6 +27,9 @@
 set -euo pipefail
 ORIGINAL_ARGS=("$@")
 
+# Prevent RStudio-inherited environment variables from overriding batch R libs.
+unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
+
 # ── Fixed paths ───────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="${TEMPLATE_DIR:-${SCRIPT_DIR}}"
@@ -333,6 +336,7 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
     --parsable \
     --wrap="
       set -euo pipefail
+      unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
       if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
         set +u
         source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
@@ -372,6 +376,7 @@ if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
     --parsable \
     --wrap="
       set -euo pipefail
+      unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
       if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
         set +u
         source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
@@ -414,6 +419,7 @@ for SAMPLE in "${SAMPLES[@]}"; do
     --parsable \
     --wrap="
       set -euo pipefail
+      unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
       if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
         # Some environment init scripts assume vars like PYTHONPATH may be unset.
         # Temporarily relax nounset while sourcing, then restore strict mode.
@@ -463,6 +469,7 @@ if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
   cat > "${INTEGRATION_JOB_SCRIPT}" <<EOF
 #!/bin/bash
 set -euo pipefail
+unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
 if [[ -n "${CONDA_INIT}" && -f "${CONDA_INIT}" ]]; then
   set +u
   source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
@@ -488,6 +495,7 @@ EOF
   cat > "${MERGE_JOB_SCRIPT}" <<EOF
 #!/bin/bash
 set -euo pipefail
+unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
 if [[ -n "${CONDA_INIT}" && -f "${CONDA_INIT}" ]]; then
   set +u
   source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
@@ -537,6 +545,7 @@ EOF
   cat > "${MERGE_SUBMITTER_SCRIPT}" <<EOF
 #!/bin/bash
 set -euo pipefail
+unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER || true
 if [[ -n "${CONDA_INIT}" && -f "${CONDA_INIT}" ]]; then
   set +u
   source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
