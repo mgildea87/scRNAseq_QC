@@ -537,7 +537,7 @@ if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
     --error="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
     --parsable \
     "${INTEGRATION_JOB_SCRIPT}")
-  echo "  Submitted: integration job  (job ${INTEGRATE_JOB_ID})"
+  echo "  Submitted: integration job  (job \${INTEGRATE_JOB_ID})"
 fi
 EOF
   chmod +x "${MERGE_JOB_SCRIPT}"
@@ -567,7 +567,7 @@ MERGE_JOB_ID=\$(sbatch \
   --error="${OUTPUT_DIR}/logs/QC_merge_%j.log" \
   --parsable \
   "${MERGE_JOB_SCRIPT}")
-echo "  Submitted: merge job  (job ${MERGE_JOB_ID})"
+echo "  Submitted: merge job  (job \${MERGE_JOB_ID})"
 EOF
   chmod +x "${MERGE_SUBMITTER_SCRIPT}"
 
