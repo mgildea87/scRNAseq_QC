@@ -346,7 +346,7 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
       echo \"Task     : integration only\"
       echo \"use_cellbender: ${USE_CELLBENDER}\"
       echo \"Start    : \$(date)\"
-      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
+      Rscript --vanilla "${TEMPLATE_DIR}/qc_batch_runner.R" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
         --integration_only TRUE \
@@ -384,7 +384,7 @@ if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
       echo \"Node     : \${SLURMD_NODENAME}\"
       echo \"Task     : merge only\"
       echo \"Start    : \$(date)\"
-      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
+      Rscript --vanilla "${TEMPLATE_DIR}/qc_batch_runner.R" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
         --merge_only   TRUE \
@@ -429,7 +429,7 @@ for SAMPLE in "${SAMPLES[@]}"; do
       echo \"Sample   : ${SAMPLE}\"
       echo \"use_cellbender: ${USE_CELLBENDER}\"
       echo \"Start    : \$(date)\"
-      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
+      Rscript --vanilla "${TEMPLATE_DIR}/qc_batch_runner.R" \
         --template     \"${TEMPLATE_DIR}/sample_QC.Rmd\" \
         --sample_sheet \"${SAMPLE_SHEET}\" \
         --sample_name  \"${SAMPLE}\" \
@@ -476,7 +476,7 @@ echo "Node     : \${SLURMD_NODENAME}"
 echo "Task     : run integration"
 echo "use_cellbender: ${USE_CELLBENDER}"
 echo "Start    : \$(date)"
-Rscript "${TEMPLATE_DIR}/qc_batch_runner.R" \
+Rscript --vanilla "${TEMPLATE_DIR}/qc_batch_runner.R" \
   --sample_sheet "${SAMPLE_SHEET}" \
   --output_dir   "${OUTPUT_DIR}" \
   --integration_only TRUE \
@@ -500,7 +500,7 @@ echo "Job ID   : \${SLURM_JOB_ID}"
 echo "Node     : \${SLURMD_NODENAME}"
 echo "Task     : merge all samples"
 echo "Start    : \$(date)"
-Rscript "${TEMPLATE_DIR}/qc_batch_runner.R" \
+Rscript --vanilla "${TEMPLATE_DIR}/qc_batch_runner.R" \
   --sample_sheet "${SAMPLE_SHEET}" \
   --output_dir   "${OUTPUT_DIR}" \
   --merge_only   TRUE

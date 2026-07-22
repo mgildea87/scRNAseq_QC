@@ -15,4 +15,4 @@ else
 	exit 1
 fi
 
-exec Rscript "${SCRIPT_DIR}/qc_batch_runner.R" "$@"
+exec Rscript --vanilla "${SCRIPT_DIR}/qc_batch_runner.R" "$@"
