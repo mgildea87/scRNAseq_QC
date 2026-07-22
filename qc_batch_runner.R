@@ -218,17 +218,27 @@ write_run_metadata <- function(opt, script_dir) {
 
   conda_info_path <- file.path(meta_dir, "conda_info.txt")
   conda_env <- Sys.getenv("CONDA_DEFAULT_ENV", unset = "")
+  conda_prefix <- Sys.getenv("CONDA_PREFIX", unset = "")
   conda_envs <- safe_system_output("conda", c("info", "--envs"))
   writeLines(c(
     paste0("recorded_utc=", format(Sys.time(), tz = "UTC", usetz = TRUE)),
     paste0("CONDA_DEFAULT_ENV=", ifelse(nzchar(conda_env), conda_env, "<unset>")),
+    paste0("CONDA_PREFIX=", ifelse(nzchar(conda_prefix), conda_prefix, "<unset>")),
     "",
     "conda info --envs:",
     if (is.na(conda_envs)) "<conda unavailable>" else conda_envs
   ), con = conda_info_path)
 
-  if (nzchar(conda_env) && !is.na(conda_envs)) {
-    conda_export <- safe_system_output("conda", c("env", "export", "-n", conda_env))
+  if (!is.na(conda_envs)) {
+    export_args <- if (nzchar(conda_prefix)) {
+      c("env", "export", "-p", conda_prefix)
+    } else if (nzchar(conda_env) && !grepl("/", conda_env, fixed = TRUE)) {
+      c("env", "export", "-n", conda_env)
+    } else {
+      character()
+    }
+
+    conda_export <- if (length(export_args) > 0L) safe_system_output("conda", export_args) else NA_character_
     if (!is.na(conda_export)) {
       writeLines(conda_export, con = file.path(meta_dir, "conda_env_export.yml"))
     }

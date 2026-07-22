@@ -335,10 +335,11 @@ if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
       set -euo pipefail
       if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
         set +u
-        source \"${CONDA_INIT}\"
+        source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
         set -u
       else
-        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+        echo \"ERROR: CONDA_INIT not found (${CONDA_INIT}). Refusing to run without the conda R environment.\" >&2
+        exit 1
       fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
@@ -373,10 +374,11 @@ if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
       set -euo pipefail
       if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
         set +u
-        source \"${CONDA_INIT}\"
+        source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
         set -u
       else
-        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+        echo \"ERROR: CONDA_INIT not found (${CONDA_INIT}). Refusing to run without the conda R environment.\" >&2
+        exit 1
       fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
@@ -416,10 +418,11 @@ for SAMPLE in "${SAMPLES[@]}"; do
         # Some environment init scripts assume vars like PYTHONPATH may be unset.
         # Temporarily relax nounset while sourcing, then restore strict mode.
         set +u
-        source \"${CONDA_INIT}\"
+        source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
         set -u
       else
-        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
+        echo \"ERROR: CONDA_INIT not found (${CONDA_INIT}). Refusing to run without the conda R environment.\" >&2
+        exit 1
       fi
       echo \"Job ID   : \${SLURM_JOB_ID}\"
       echo \"Node     : \${SLURMD_NODENAME}\"
@@ -438,76 +441,142 @@ for SAMPLE in "${SAMPLES[@]}"; do
   SAMPLE_JOB_IDS+=("${JOB_ID}")
 done
 
-# ── Submit merge job (runs only if ALL sample jobs succeed) ───────────────────
+# ── Submit merge job only after sample QC outputs are present ────────────────
 if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
-  # Build colon-separated dependency string: afterok:id1:id2:...
   DEPENDENCY="afterok:$(IFS=:; echo "${SAMPLE_JOB_IDS[*]}")"
 
-  MERGE_JOB_ID=$(sbatch \
-    --job-name="QC_merge" \
+  MERGE_SUBMITTER_SCRIPT="${OUTPUT_DIR}/run_metadata/merge_submitter_${INVOCATION_ID}.sh"
+  MERGE_JOB_SCRIPT="${OUTPUT_DIR}/run_metadata/merge_job_${INVOCATION_ID}.sh"
+  INTEGRATION_JOB_SCRIPT="${OUTPUT_DIR}/run_metadata/integration_job_${INVOCATION_ID}.sh"
+
+  SAMPLE_CHECK_LINES=""
+  for SAMPLE in "${SAMPLES[@]}"; do
+    SAMPLE_LABEL=$(printf '%q' "${SAMPLE}")
+    SAMPLE_RDS=$(printf '%q' "${OUTPUT_DIR}/${SAMPLE}_QC.rds")
+    SAMPLE_HTML=$(printf '%q' "${OUTPUT_DIR}/${SAMPLE}_QC.html")
+    SAMPLE_CHECK_LINES+=$'      if [[ ! -f '"${SAMPLE_RDS}"' || ! -f '"${SAMPLE_HTML}"' ]]; then\n'
+    SAMPLE_CHECK_LINES+=$'        echo "ERROR: expected QC outputs missing for sample '"${SAMPLE_LABEL}"'" >&2\n'
+    SAMPLE_CHECK_LINES+=$'        exit 1\n'
+    SAMPLE_CHECK_LINES+=$'      fi\n'
+  done
+
+  cat > "${INTEGRATION_JOB_SCRIPT}" <<EOF
+#!/bin/bash
+set -euo pipefail
+if [[ -n "${CONDA_INIT}" && -f "${CONDA_INIT}" ]]; then
+  set +u
+  source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
+  set -u
+else
+  echo "ERROR: CONDA_INIT not found (${CONDA_INIT}). Refusing to run without the conda R environment." >&2
+  exit 1
+fi
+echo "Job ID   : \${SLURM_JOB_ID}"
+echo "Node     : \${SLURMD_NODENAME}"
+echo "Task     : run integration"
+echo "use_cellbender: ${USE_CELLBENDER}"
+echo "Start    : \$(date)"
+Rscript "${TEMPLATE_DIR}/qc_batch_runner.R" \
+  --sample_sheet "${SAMPLE_SHEET}" \
+  --output_dir   "${OUTPUT_DIR}" \
+  --integration_only TRUE \
+  --integration_level "${INTEGRATION_LEVEL}"
+echo "Finished : \$(date)"
+EOF
+  chmod +x "${INTEGRATION_JOB_SCRIPT}"
+
+  cat > "${MERGE_JOB_SCRIPT}" <<EOF
+#!/bin/bash
+set -euo pipefail
+if [[ -n "${CONDA_INIT}" && -f "${CONDA_INIT}" ]]; then
+  set +u
+  source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
+  set -u
+else
+  echo "ERROR: CONDA_INIT not found (${CONDA_INIT}). Refusing to run without the conda R environment." >&2
+  exit 1
+fi
+echo "Job ID   : \${SLURM_JOB_ID}"
+echo "Node     : \${SLURMD_NODENAME}"
+echo "Task     : merge all samples"
+echo "Start    : \$(date)"
+Rscript "${TEMPLATE_DIR}/qc_batch_runner.R" \
+  --sample_sheet "${SAMPLE_SHEET}" \
+  --output_dir   "${OUTPUT_DIR}" \
+  --merge_only   TRUE
+echo "Finished : \$(date)"
+
+MERGED_QC_RDS="${OUTPUT_DIR}/merged_QC.rds"
+MERGE_HTML="${OUTPUT_DIR}/merge_analysis.html"
+if [[ ! -f "${MERGED_QC_RDS}" ]]; then
+  echo "ERROR: merged output missing after merge job: ${MERGED_QC_RDS}" >&2
+  exit 1
+fi
+if [[ -f "${TEMPLATE_DIR}/merge_analysis.Rmd" && ! -f "${MERGE_HTML}" ]]; then
+  echo "ERROR: merge report missing after merge job: ${MERGE_HTML}" >&2
+  exit 1
+fi
+
+if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
+  INTEGRATE_JOB_ID=\$(sbatch \
+    --job-name="QC_integrate" \
     --partition=cpu_short \
     --ntasks=1 \
     --cpus-per-task=1 \
-    --mem="${MERGE_MEM_GB}G" \
+    --mem="${INTEGRATION_MEM_GB}G" \
+    --time="${WALL_TIME}" \
+    --output="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
+    --error="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
+    --parsable \
+    "${INTEGRATION_JOB_SCRIPT}")
+  echo "  Submitted: integration job  (job ${INTEGRATE_JOB_ID})"
+fi
+EOF
+  chmod +x "${MERGE_JOB_SCRIPT}"
+
+  cat > "${MERGE_SUBMITTER_SCRIPT}" <<EOF
+#!/bin/bash
+set -euo pipefail
+if [[ -n "${CONDA_INIT}" && -f "${CONDA_INIT}" ]]; then
+  set +u
+  source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
+  set -u
+else
+  echo "ERROR: CONDA_INIT not found (${CONDA_INIT}). Refusing to run without the conda R environment." >&2
+  exit 1
+fi
+${SAMPLE_CHECK_LINES}
+echo "Submitting merge job..."
+MERGE_JOB_ID=\$(sbatch \
+  --job-name="QC_merge" \
+  --partition=cpu_short \
+  --ntasks=1 \
+  --cpus-per-task=1 \
+  --mem="${MERGE_MEM_GB}G" \
+  --time="${WALL_TIME}" \
+  --output="${OUTPUT_DIR}/logs/QC_merge_%j.log" \
+  --error="${OUTPUT_DIR}/logs/QC_merge_%j.log" \
+  --parsable \
+  "${MERGE_JOB_SCRIPT}")
+echo "  Submitted: merge job  (job ${MERGE_JOB_ID})"
+EOF
+  chmod +x "${MERGE_SUBMITTER_SCRIPT}"
+
+  MERGE_SUBMITTER_JOB_ID=$(sbatch \
+    --job-name="QC_merge_submit" \
+    --partition=cpu_short \
+    --ntasks=1 \
+    --cpus-per-task=1 \
+    --mem="1G" \
     --time="${WALL_TIME}" \
     --dependency="${DEPENDENCY}" \
-    --output="${OUTPUT_DIR}/logs/QC_merge_%j.log" \
-    --error="${OUTPUT_DIR}/logs/QC_merge_%j.log" \
+    --output="${OUTPUT_DIR}/logs/QC_merge_submit_%j.log" \
+    --error="${OUTPUT_DIR}/logs/QC_merge_submit_%j.log" \
     --parsable \
-    --wrap="
-      set -euo pipefail
-      if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
-        set +u
-        source \"${CONDA_INIT}\"
-        set -u
-      else
-        echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
-      fi
-      echo \"Job ID   : \${SLURM_JOB_ID}\"
-      echo \"Node     : \${SLURMD_NODENAME}\"
-      echo \"Task     : merge all samples\"
-      echo \"Start    : \$(date)\"
-      Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
-        --sample_sheet \"${SAMPLE_SHEET}\" \
-        --output_dir   \"${OUTPUT_DIR}\" \
-        --merge_only   TRUE
-      echo \"Finished : \$(date)\"
-    ")
-  echo "  Submitted: merge job  (job ${MERGE_JOB_ID}, depends on: ${SAMPLE_JOB_IDS[*]})"
-
+    "${MERGE_SUBMITTER_SCRIPT}")
+  echo "  Submitted: merge submitter job  (job ${MERGE_SUBMITTER_JOB_ID}, depends on: ${SAMPLE_JOB_IDS[*]})"
   if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
-    INTEGRATE_JOB_ID=$(sbatch \
-      --job-name="QC_integrate" \
-      --partition=cpu_short \
-      --ntasks=1 \
-      --cpus-per-task=1 \
-      --mem="${INTEGRATION_MEM_GB}G" \
-      --time="${WALL_TIME}" \
-      --dependency="afterok:${MERGE_JOB_ID}" \
-      --output="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
-      --error="${OUTPUT_DIR}/logs/QC_integrate_%j.log" \
-      --parsable \
-      --wrap="
-        set -euo pipefail
-        if [[ -n \"${CONDA_INIT}\" && -f \"${CONDA_INIT}\" ]]; then
-          set +u
-          source \"${CONDA_INIT}\"
-          set -u
-        else
-          echo \"WARN: CONDA_INIT not found (${CONDA_INIT}). Using Rscript from PATH.\" >&2
-        fi
-        echo \"Job ID   : \${SLURM_JOB_ID}\"
-        echo \"Node     : \${SLURMD_NODENAME}\"
-        echo \"Task     : run integration\"
-        echo \"Start    : \$(date)\"
-        Rscript \"${TEMPLATE_DIR}/qc_batch_runner.R\" \
-          --sample_sheet \"${SAMPLE_SHEET}\" \
-          --output_dir   \"${OUTPUT_DIR}\" \
-          --integration_only TRUE \
-          --integration_level \"${INTEGRATION_LEVEL}\"
-        echo \"Finished : \$(date)\"
-      ")
-    echo "  Submitted: integration job  (job ${INTEGRATE_JOB_ID}, depends on merge job ${MERGE_JOB_ID})"
+    echo "  Integration job will be submitted after the merge job confirms merged outputs."
   fi
 elif [[ ${#SAMPLES[@]} -gt 1 ]]; then
   echo "  Skipping merge job submission because --skip_merge is TRUE"
