@@ -19,7 +19,7 @@
 #   --merge_only  <TRUE/FALSE> skip per-sample QC and run merge_analysis from existing sample RDS files (default: FALSE)
 #   --skip_merge  <TRUE/FALSE> skip submitting merge job     (default: FALSE)
 #   --run_integration <TRUE/FALSE> render integrate_RNA.Rmd after merge (default: FALSE)
-#   --integration_level <Batch|Sample> required when integration runs
+#   --integration_level <Batch|Sample> integration level when integration runs (default: Sample)
 #   --integration_only <TRUE/FALSE> run only integration from merged_QC.rds (default: FALSE)
 #   --use_cellbender <TRUE/FALSE> use cellbender_filtered.h5 as filtered input (default: FALSE)
 # =============================================================================
@@ -46,7 +46,7 @@ WALL_TIME="2:00:00"
 MERGE_ONLY="FALSE"
 SKIP_MERGE="FALSE"
 RUN_INTEGRATION="FALSE"
-INTEGRATION_LEVEL=""
+INTEGRATION_LEVEL="Sample"
 INTEGRATION_ONLY="FALSE"
 USE_CELLBENDER="FALSE"
 
