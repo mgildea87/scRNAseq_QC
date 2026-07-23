@@ -460,8 +460,14 @@ if [[ ${#SAMPLES[@]} -gt 1 && "${SKIP_MERGE}" != "TRUE" ]]; then
     SAMPLE_LABEL=$(printf '%q' "${SAMPLE}")
     SAMPLE_RDS=$(printf '%q' "${OUTPUT_DIR}/${SAMPLE}_QC.rds")
     SAMPLE_HTML=$(printf '%q' "${OUTPUT_DIR}/${SAMPLE}_QC.html")
-    SAMPLE_CHECK_LINES+=$'      if [[ ! -f '"${SAMPLE_RDS}"' || ! -f '"${SAMPLE_HTML}"' ]]; then\n'
-    SAMPLE_CHECK_LINES+=$'        echo "ERROR: expected QC outputs missing for sample '"${SAMPLE_LABEL}"'" >&2\n'
+    SAMPLE_CHECK_LINES+=$'      if [[ ! -f '
+    SAMPLE_CHECK_LINES+="${SAMPLE_RDS}"
+    SAMPLE_CHECK_LINES+=$' || ! -f '
+    SAMPLE_CHECK_LINES+="${SAMPLE_HTML}"
+    SAMPLE_CHECK_LINES+=$' ]]; then\n'
+    SAMPLE_CHECK_LINES+=$'        echo "ERROR: expected QC outputs missing for sample '
+    SAMPLE_CHECK_LINES+="${SAMPLE_LABEL}"
+    SAMPLE_CHECK_LINES+=$'" >&2\n'
     SAMPLE_CHECK_LINES+=$'        exit 1\n'
     SAMPLE_CHECK_LINES+=$'      fi\n'
   done
