@@ -844,6 +844,120 @@ gene_mito <- ggplot(seurat@meta.data,
 count_gene + count_mito + gene_mito
 ```
 
+## Ribosomal and complexity metrics
+Adds ribosomal percentage and visualizes its relationship with mitochondrial
+percentage, UMI count, and genes detected for this sample.
+
+```{r qc-ribosomal-prefilter, fig.height=5, fig.width=10}
+ribosomal_features <- grep('^(RPL|RPS|Rpl|Rps)', rownames(seurat), value = TRUE)
+if (length(ribosomal_features) > 0L) {
+  seurat$percent.Ribosomal <- PercentageFeatureSet(
+    seurat,
+    features = ribosomal_features,
+    assay = 'RNA'
+  )
+} else {
+  seurat$percent.Ribosomal <- 0
+  cat('No ribosomal genes detected; setting percent.Ribosomal to 0.\n')
+}
+
+VlnPlot(
+  seurat,
+  features = c('percent.Ribosomal', 'percent.mt'),
+  group.by = 'orig.ident',
+  pt.size = 0,
+  log = TRUE,
+  ncol = 2
+) + NoLegend()
+```
+
+```{r qc-ribosomal-scatter-prefilter, fig.height=8, fig.width=12}
+qc.metrics <- seurat@meta.data
+
+ribo_scatter <- ggplot(
+  qc.metrics,
+  aes(x = nCount_RNA, y = nFeature_RNA, colour = percent.Ribosomal)
+) +
+  geom_point(size = 0.5) +
+  scale_color_viridis_c() +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_classic() +
+  labs(
+    title = 'UMI count versus genes detected',
+    colour = '% ribosomal'
+  )
+
+mt_scatter <- ggplot(
+  qc.metrics,
+  aes(x = nCount_RNA, y = nFeature_RNA, colour = percent.mt)
+) +
+  geom_point(size = 0.5) +
+  scale_color_viridis_c() +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_classic() +
+  labs(
+    title = 'UMI count versus genes detected',
+    colour = '% mitochondrial'
+  )
+
+print(ribo_scatter)
+print(mt_scatter)
+```
+
+```{r qc-complexity-prefilter, fig.height=5, fig.width=10}
+qc.metrics$complexity <- with(
+  qc.metrics,
+  log10(nFeature_RNA) / log10(nCount_RNA)
+)
+
+complexity.lm <- lm(
+  log10(nFeature_RNA) ~ log10(nCount_RNA),
+  data = qc.metrics
+)
+
+qc.metrics$complexity_diff <- with(
+  qc.metrics,
+  log10(nFeature_RNA) - predict(complexity.lm, newdata = qc.metrics)
+)
+
+complexity_plot <- ggplot(
+  qc.metrics,
+  aes(x = log10(nCount_RNA), y = log10(nFeature_RNA), colour = complexity_diff)
+) +
+  geom_point(size = 0.5) +
+  geom_abline(
+    slope = coef(complexity.lm)[2],
+    intercept = coef(complexity.lm)[1]
+  ) +
+  scale_colour_gradient2(low = 'blue2', mid = 'grey', high = 'red2') +
+  theme_classic() +
+  labs(
+    title = 'Cell complexity',
+    x = 'log10(UMI count)',
+    y = 'log10(genes detected)',
+    colour = 'Complexity residual'
+  )
+
+complexity_qc_plot <- ggplot(
+  qc.metrics,
+  aes(x = complexity_diff, y = percent.Ribosomal, colour = percent.mt)
+) +
+  geom_point(size = 1) +
+  scale_color_viridis_c() +
+  theme_classic() +
+  labs(
+    title = 'Complexity residual versus QC percentages',
+    x = 'Complexity residual',
+    y = '% ribosomal',
+    colour = '% mitochondrial'
+  )
+
+print(complexity_plot)
+print(complexity_qc_plot)
+```
+
 # MALAT1
 MALAT1 is a highly-expressed nuclear lncRNA. After normalisation, cells with very low MALAT1 are likely lysed or damaged. The feature name (`MALAT1` / `Malat1`) is selected automatically based on the detected species.
 

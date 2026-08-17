@@ -170,6 +170,109 @@ if (need_sct_reduction || need_sct_clusters) {
 saveRDS(seurat, file = 'merged_QC.rds')
 ```
 
+## QC metric distributions
+```{r qc-global-violin, fig.height=5, fig.width=7}
+ribosomal_features <- grep('^(RPL|RPS|Rpl|Rps)', rownames(seurat), value = TRUE)
+seurat$percent.Ribosomal <- if (length(ribosomal_features) > 0L) {
+  PercentageFeatureSet(seurat, features = ribosomal_features, assay = 'RNA')
+} else {
+  rep(0, ncol(seurat))
+}
+
+VlnPlot(seurat, features = 'percent.Ribosomal', group.by = 'sample_name', pt.size = 0, log = TRUE)+
+  NoLegend()+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust= 1),
+        axis.title.x = element_blank())
+
+VlnPlot(seurat, features = 'percent.mt', group.by = 'sample_name', pt.size = 0, log = TRUE)+
+  NoLegend()+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust= 1),
+        axis.title.x = element_blank())
+```
+
+## QC metric scatter plots
+```{r qc-global-scatter, fig.height=10, fig.width=12}
+qc.metrics <- tibble::as_tibble(seurat[[]], rownames = 'Cell.Barcode')
+
+qc.metrics |>
+  dplyr::arrange(percent.Ribosomal) |>
+  ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.Ribosomal)) +
+  geom_point() +
+  scale_color_viridis_c()+
+  ggtitle("Example of plotting QC metrics") +
+  theme_minimal()+
+  facet_wrap(~sample_name)
+
+qc.metrics |>
+  dplyr::arrange(percent.Ribosomal) |>
+  ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.Ribosomal)) +
+  geom_point() +
+  scale_color_viridis_c()+
+  ggtitle("Example of plotting QC metrics") +
+  theme_minimal()+
+  facet_wrap(~sample_name)+
+  scale_x_log10() +
+  scale_y_log10()
+
+qc.metrics |>
+  dplyr::arrange(percent.mt) |>
+  ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.mt)) +
+  geom_point() +
+  scale_color_viridis_c()+
+  ggtitle("Example of plotting QC metrics") +
+  theme_minimal()+
+  facet_wrap(~sample_name)
+
+qc.metrics |>
+  dplyr::arrange(percent.mt) |>
+  ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.mt)) +
+  geom_point() +
+  scale_color_viridis_c()+
+  ggtitle("Example of plotting QC metrics") +
+  theme_minimal()+
+  facet_wrap(~sample_name)+
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+## Complexity analysis
+```{r qc-complexity, fig.height=10, fig.width=12}
+
+qc.metrics <- qc.metrics |>
+  dplyr::mutate(complexity = log10(nFeature_RNA) / log10(nCount_RNA))
+
+complexity.lm <- lm(log10(nFeature_RNA) ~ log10(nCount_RNA), data = qc.metrics)
+
+complexity.lm
+
+qc.metrics <- qc.metrics |>
+  dplyr::mutate(
+    complexity_diff = log10(nFeature_RNA) - predict(complexity.lm, newdata = qc.metrics)
+  )
+
+qc.metrics |>
+  dplyr::mutate(complexity_diff = replace(complexity_diff, complexity_diff < -0.1, -0.1)) |>
+  ggplot(aes(x=log10(nCount_RNA), y=log10(nFeature_RNA), colour=complexity_diff)) +
+  geom_point(size=0.5) +
+  geom_abline(slope = coef(complexity.lm)[2], intercept = coef(complexity.lm)[1]) +
+  scale_colour_gradient2(low="blue2",mid="grey",high="red2")+
+  facet_wrap(~sample_name)+
+  theme_minimal()
+```
+
+## Complexity versus other QC metrics
+```{r qc-complexity-relationships, fig.height=5, fig.width=7}
+qc.metrics |>
+  ggplot(aes(x=complexity_diff, y=percent.Ribosomal, color = percent.mt)) +
+  geom_point(size=1)+
+  facet_wrap(~sample_name)+
+  scale_color_viridis_c()+
+  theme_minimal()
+```
+
+
 # Dim reduction plots
 Visualize log-normalization and SCT embeddings colored and split by batch and sample name.
 ```{r dim-reduction-plots, fig.height=7, fig.width=10, message=FALSE, warning=F}
