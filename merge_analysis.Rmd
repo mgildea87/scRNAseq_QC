@@ -332,7 +332,7 @@ for (feature_name in qc_features) {
 # Differential expression (cluster markers)
 Run pseudobulk-style cluster marker discovery for log-norm and SCT cluster labels.
 ```{r differential-expression-markers, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNotmalize')
+FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNormalize')
 FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_sct_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
 ```
 
@@ -358,7 +358,7 @@ plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
   invisible(mat)
 }
 
-mat_rna <- plot_marker_heatmap('FindMarkersBulk_merged_log_norm/Top_markers.csv', 'seurat_clusters_merged', 'RNA', 'Top marker heatmap - log-norm')
+mat_rna <- plot_marker_heatmap('FindMarkersBulk_merged_LogNormalize/Top_markers.csv', 'seurat_clusters_merged', 'RNA', 'Top marker heatmap - log-norm')
 mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'seurat_clusters_sct_merged', 'SCT', 'Top marker heatmap - SCT')
 ```
 

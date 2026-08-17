@@ -175,7 +175,6 @@ seurat <- RunHarmony(
   object = seurat,
   group.by.vars = integration_group_column,
   reduction = 'PCA_RNA_split',
-  assay.use = 'RNA',
   reduction.save = 'harmony.rna',
   verbose = FALSE
 )
@@ -192,7 +191,6 @@ seurat <- RunHarmony(
   object = seurat,
   group.by.vars = integration_group_column,
   reduction = 'PCA_SCT_split',
-  assay.use = 'SCT',
   reduction.save = 'harmony.sct',
   verbose = FALSE
 )
