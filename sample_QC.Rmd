@@ -26,6 +26,20 @@ params:
   max_nFeature_RNA: NA
   max_percent_mt:   NA
   min_malat1:       0
+  min_nCount_ADT:   NA
+  max_nCount_ADT:   NA
+  # Hashtag (HTO) demultiplexing and CITE-seq (ADT) options. Leave use_hashtag /
+  # use_adt FALSE to skip these sections entirely (default, matches prior behavior).
+  use_hashtag:            FALSE
+  use_adt:                FALSE
+  feature_reference_path: ""
+  hto_path:               ""
+  adt_path:               ""
+  raw_adt_path:           ""
+  hto_features:           ""
+  dsb_background_rna_max:  NA
+  dsb_background_prot_min: NA
+  dsb_background_prot_max: NA
 ---
 
 <style type="text/css">
@@ -58,6 +72,8 @@ find_qc_support_file <- function(filename) {
     call. = FALSE
   )
 }
+
+source(find_qc_support_file('qc_helpers.R'))
 ```
 
 Track run progress by logging each code block as it starts, with timestamps.
@@ -83,7 +99,19 @@ param_lines <- c(
   sprintf('[%s] PARAM min_nFeature_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nFeature_RNA)),
   sprintf('[%s] PARAM max_nFeature_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nFeature_RNA)),
   sprintf('[%s] PARAM max_percent_mt=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_percent_mt)),
-  sprintf('[%s] PARAM min_malat1=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_malat1))
+  sprintf('[%s] PARAM min_malat1=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_malat1)),
+  sprintf('[%s] PARAM min_nCount_ADT=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nCount_ADT)),
+  sprintf('[%s] PARAM max_nCount_ADT=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nCount_ADT)),
+  sprintf('[%s] PARAM use_hashtag=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$use_hashtag)),
+  sprintf('[%s] PARAM use_adt=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$use_adt)),
+  sprintf('[%s] PARAM feature_reference_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$feature_reference_path)),
+  sprintf('[%s] PARAM hto_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$hto_path)),
+  sprintf('[%s] PARAM adt_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$adt_path)),
+  sprintf('[%s] PARAM raw_adt_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$raw_adt_path)),
+  sprintf('[%s] PARAM hto_features=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$hto_features)),
+  sprintf('[%s] PARAM dsb_background_rna_max=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$dsb_background_rna_max)),
+  sprintf('[%s] PARAM dsb_background_prot_min=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$dsb_background_prot_min)),
+  sprintf('[%s] PARAM dsb_background_prot_max=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$dsb_background_prot_max))
 )
 cat(paste0(param_lines, '\n'), file = progress_log, append = TRUE)
 
@@ -147,33 +175,16 @@ Loads the CellRanger-filtered matrix for QC analysis and the unfiltered (raw) ma
 ```{r load-data}
 # Load either 10x MEX directories or 10x/CellBender .h5 files.
 # This pipeline assumes the sample sheet points directly at each matrix input.
-select_rna_counts <- function(x, label, input_path) {
-  if (inherits(x, "dgCMatrix") || is.matrix(x)) {
-    return(x)
-  }
-
-  if (!is.list(x) || length(x) == 0L) {
-    stop("Unsupported ", label, " input format at: ", input_path, call. = FALSE)
-  }
-
-  if (length(x) == 1L) {
-    return(x[[1L]])
-  }
-
-  stop(
-    "Multiple matrices detected in ", label, " input: ", input_path,
-    ". This QC pipeline expects a single scRNA matrix per input .h5 file.",
-    call. = FALSE
-  )
-}
-
-read_10x_input <- function(input_path, label) {
+# Read10X()/Read10X_h5() return either a single matrix (RNA-only input) or a
+# named list keyed by feature type (e.g. "Gene Expression", "Antibody Capture",
+# "Multiplexing Capture") for CellRanger multi/feature-barcoded matrices.
+read_10x_input_list <- function(input_path, label) {
   if (dir.exists(input_path)) {
-    return(select_rna_counts(Read10X(input_path), label, input_path))
+    return(Read10X(input_path))
   }
 
   if (file.exists(input_path) && grepl("\\.(h5|hdf5)$", input_path, ignore.case = TRUE)) {
-    return(select_rna_counts(Read10X_h5(input_path), label, input_path))
+    return(Read10X_h5(input_path))
   }
 
   stop(
@@ -181,6 +192,106 @@ read_10x_input <- function(input_path, label) {
     ". Expected a 10x MEX directory or an .h5/.hdf5 file.",
     call. = FALSE
   )
+}
+
+# Extract a named feature-type matrix from Read10X()/Read10X_h5() output.
+# Returns NULL if the requested feature type is not present.
+extract_feature_type <- function(x, feature_type, label, input_path) {
+  if (inherits(x, "dgCMatrix") || is.matrix(x)) {
+    if (identical(feature_type, "Gene Expression")) return(x)
+    return(NULL)
+  }
+
+  if (!is.list(x) || length(x) == 0L) {
+    stop("Unsupported ", label, " input format at: ", input_path, call. = FALSE)
+  }
+
+  if (is.null(names(x)) || !any(nzchar(names(x)))) {
+    if (length(x) == 1L) {
+      return(if (identical(feature_type, "Gene Expression")) x[[1L]] else NULL)
+    }
+    stop(
+      "Multiple unnamed matrices detected in ", label, " input: ", input_path,
+      ". Expected named feature types (e.g. 'Gene Expression', 'Antibody Capture').",
+      call. = FALSE
+    )
+  }
+
+  match_idx <- which(tolower(names(x)) == tolower(feature_type))
+  if (length(match_idx) == 0L) return(NULL)
+  x[[match_idx[1L]]]
+}
+
+read_10x_input <- function(input_path, label) {
+  rna <- extract_feature_type(read_10x_input_list(input_path, label), "Gene Expression", label, input_path)
+  if (is.null(rna)) {
+    stop("Could not find a 'Gene Expression' matrix in ", label, " input: ", input_path, call. = FALSE)
+  }
+  rna
+}
+
+read_10x_assay_input <- function(input_path, label, feature_types) {
+  select_10x_assay_matrix(
+    read_10x_input_list(input_path, label),
+    feature_types = feature_types,
+    label = label,
+    input_path = input_path
+  )
+}
+
+# Resolve HTO/ADT matrices for a given 10x input, in priority order:
+# explicit hto_path/adt_path > native "Multiplexing Capture" (HTO only) >
+# split_antibody_capture() on "Antibody Capture".
+resolve_hto_adt <- function(input_path, label, want_hto, want_adt,
+                             hto_path, adt_path, feature_names, hto_features) {
+  result <- list(hto = NULL, adt = NULL)
+  if (!want_hto && !want_adt) return(result)
+
+  if (want_hto && nzchar(trimws(hto_path))) {
+    result$hto <- read_10x_assay_input(
+      hto_path, paste0(label, ' HTO'),
+      feature_types = c('Multiplexing Capture', 'Antibody Capture')
+    )
+  }
+  if (want_adt && nzchar(trimws(adt_path))) {
+    result$adt <- read_10x_assay_input(
+      adt_path, paste0(label, ' ADT'),
+      feature_types = 'Antibody Capture'
+    )
+  }
+
+  still_need_hto <- want_hto && is.null(result$hto)
+  still_need_adt <- want_adt && is.null(result$adt)
+  if (still_need_hto || still_need_adt) {
+    raw_list <- read_10x_input_list(input_path, label)
+    if (still_need_hto) {
+      mux <- extract_feature_type(raw_list, 'Multiplexing Capture', label, input_path)
+      if (!is.null(mux)) result$hto <- mux
+    }
+    ab <- extract_feature_type(raw_list, 'Antibody Capture', label, input_path)
+    if (!is.null(ab) && ((still_need_hto && is.null(result$hto)) || still_need_adt)) {
+      split_res <- split_antibody_capture(ab, feature_names, hto_features)
+      if (still_need_hto && is.null(result$hto)) result$hto <- split_res$hto
+      if (still_need_adt) result$adt <- split_res$adt
+    }
+  }
+
+  if (want_hto && is.null(result$hto)) {
+    stop(
+      'use_hashtag TRUE but no HTO features could be resolved from ', label, ' input: ', input_path,
+      '. Provide hto_path or ensure hto_features matches feature_reference.csv names.',
+      call. = FALSE
+    )
+  }
+  if (want_adt && is.null(result$adt)) {
+    stop(
+      'use_adt TRUE but no ADT features could be resolved from ', label, ' input: ', input_path,
+      '. Provide adt_path or ensure feature_reference.csv names include non-HTO Antibody Capture features.',
+      call. = FALSE
+    )
+  }
+
+  result
 }
 
 if (isTRUE(params$use_cellbender)) {
@@ -210,8 +321,54 @@ describe_loaded_files <- function(input_path) {
   input_path
 }
 
+feature_reference_names <- NULL
+if (isTRUE(params$use_hashtag) || isTRUE(params$use_adt)) {
+  if (is.na(params$feature_reference_path) ||
+      !nzchar(trimws(params$feature_reference_path)) ||
+      !file.exists(params$feature_reference_path)) {
+    stop(
+      'feature_reference_path must point to an existing feature_reference.csv when use_hashtag or use_adt is TRUE for sample ',
+      params$sample_name, '.',
+      call. = FALSE
+    )
+  }
+  feature_reference_names <- read_feature_reference_names(params$feature_reference_path)
+}
+validate_raw_adt_path(params$use_adt, params$raw_adt_path)
+
 seurat     <- read_10x_input(params$filtered_path, "filtered")
 raw_matrix <- read_10x_input(params$raw_path, "raw")
+
+# Resolve optional HTO (cell hashing) and ADT (CITE-seq) matrices; no-op when
+# neither use_hashtag nor use_adt is set (default), leaving RNA-only behavior unchanged.
+hto_matrix_filtered <- NULL
+adt_matrix_filtered <- NULL
+adt_matrix_raw      <- NULL
+
+if (isTRUE(params$use_hashtag) || isTRUE(params$use_adt)) {
+  filtered_hto_adt <- resolve_hto_adt(
+    input_path = params$filtered_path, label = 'filtered',
+    want_hto = isTRUE(params$use_hashtag), want_adt = isTRUE(params$use_adt),
+    hto_path = params$hto_path, adt_path = params$adt_path,
+    feature_names = feature_reference_names, hto_features = params$hto_features
+  )
+  hto_matrix_filtered <- filtered_hto_adt$hto
+  adt_matrix_filtered <- filtered_hto_adt$adt
+
+  if (isTRUE(params$use_adt)) {
+    # DSB background counts always come from the explicit raw ADT input.
+    raw_hto_adt <- resolve_hto_adt(
+      input_path = params$raw_path, label = 'raw',
+      want_hto = FALSE, want_adt = TRUE,
+      hto_path = '', adt_path = params$raw_adt_path,
+      feature_names = feature_reference_names, hto_features = params$hto_features
+    )
+    adt_matrix_raw <- raw_hto_adt$adt
+  }
+
+  cat('HTO features resolved:', if (!is.null(hto_matrix_filtered)) nrow(hto_matrix_filtered) else 0, '\n')
+  cat('ADT features resolved:', if (!is.null(adt_matrix_filtered)) nrow(adt_matrix_filtered) else 0, '\n')
+}
 
 filtered_loaded <- describe_loaded_files(params$filtered_path)
 raw_loaded <- describe_loaded_files(params$raw_path)
@@ -620,6 +777,157 @@ seurat$Sample        <- rep(params$sample_name, ncol(seurat))
 seurat$batch         <- rep(params$batch, ncol(seurat))
 ```
 
+```{r attach-hto-adt-assays}
+# Attach optional HTO/ADT assays, restricting to barcodes present in all
+# requested assays. No-op (seurat unchanged) when neither assay was resolved.
+if (!is.null(hto_matrix_filtered) || !is.null(adt_matrix_filtered)) {
+  common_cells <- colnames(seurat)
+  if (!is.null(hto_matrix_filtered)) common_cells <- intersect(common_cells, colnames(hto_matrix_filtered))
+  if (!is.null(adt_matrix_filtered)) common_cells <- intersect(common_cells, colnames(adt_matrix_filtered))
+
+  dropped_n <- ncol(seurat) - length(common_cells)
+  if (dropped_n > 0) {
+    cat('Dropping', dropped_n, 'RNA cells missing HTO/ADT barcodes before attaching HTO/ADT assays.\n')
+    seurat <- seurat[, common_cells]
+  }
+
+  if (!is.null(hto_matrix_filtered)) {
+    seurat[['HTO']] <- CreateAssayObject(counts = hto_matrix_filtered[, common_cells, drop = FALSE])
+    cat('Attached HTO assay with', nrow(hto_matrix_filtered), 'features.\n')
+  }
+  if (!is.null(adt_matrix_filtered)) {
+    seurat[['ADT']] <- CreateAssayObject(counts = adt_matrix_filtered[, common_cells, drop = FALSE])
+    cat('Attached ADT assay with', nrow(adt_matrix_filtered), 'features.\n')
+  }
+}
+```
+
+```{r hto-section-header, results='asis', echo=FALSE}
+if (isTRUE(params$use_hashtag)) {
+  cat(
+    '# Hashtag demultiplexing\n\n',
+    'Demultiplexes pooled hashtagged cells into per-cell sample identity using ',
+    '`HTODemux`, with diagnostic plots and an intra-sample doublet check via ',
+    '`scDblFinder::recoverDoublets`.\n\n',
+    sep = ''
+  )
+}
+```
+
+```{r htodemux, eval=isTRUE(params$use_hashtag)}
+# HTODemux requires CLR-normalized HTO counts (independent of ADT's DSB choice).
+seurat <- NormalizeData(seurat, assay = 'HTO', normalization.method = 'CLR', margin = 2)
+seurat <- HTODemux(seurat, assay = 'HTO', positive.quantile = 0.99)
+
+seurat$HTO_sample   <- seurat$hash.ID
+seurat$HTO_class    <- seurat$HTO_classification.global
+seurat$replicate_id <- paste(params$sample_name, seurat$hash.ID, sep = '_')
+
+cat('HTO classification counts:\n')
+print(table(seurat$HTO_class))
+```
+
+```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag), fig.height=10, fig.width=18}
+HTOHeatmap(seurat, assay = 'HTO')
+RidgePlot(seurat, assay = 'HTO', features = rownames(seurat[['HTO']]), ncol = 2)
+```
+
+```{r hto-qc-plots2, eval=isTRUE(params$use_hashtag), fig.height=8, fig.width=10}
+# Per-HTO CLR density plots show assigned cells against all other cells.
+VlnPlot(seurat, features = 'nCount_RNA', group.by = 'HTO_class', log = TRUE, pt.size = 0.1)
+hto_data <- GetAssayData(seurat, assay = 'HTO', layer = 'data')
+hto_thresholds <- hto_singlet_expression_thresholds(
+  hto_data,
+  hto_class = seurat$HTO_class,
+  hash_id = seurat$hash.ID
+)
+for (hto_feature in rownames(hto_data)) {
+  gg_data <- data.frame(HTO_counts = hto_data[hto_feature, ], hash_ID = as.character(seurat$hash.ID))
+  gg_data$hash_ID[gg_data$hash_ID != hto_feature] <- 'Other'
+  p <- ggplot(gg_data, aes(x = HTO_counts, fill = hash_ID, color = hash_ID)) +
+    geom_density(alpha = 0.5) +
+    theme_classic() +
+    ggtitle(hto_feature)
+  print(p)
+
+  all_cell_expression <- data.frame(HTO_expression = as.numeric(hto_data[hto_feature, ]))
+  hto_threshold <- unname(hto_thresholds[[hto_feature]])
+  all_cell_histogram <- ggplot(all_cell_expression, aes(x = HTO_expression)) +
+    geom_histogram(aes(y = after_stat(density)), bins = 50,
+                   fill = 'grey80', color = 'white') +
+    geom_density(color = 'steelblue4', linewidth = 0.8, na.rm = TRUE) +
+    theme_classic() +
+    labs(
+      title = paste(hto_feature, 'CLR expression across all cells'),
+      subtitle = if (is.finite(hto_threshold)) {
+        paste('Minimum Singlet expression:', signif(hto_threshold, 4))
+      } else {
+        'No Singlet cells assigned to this HTO'
+      },
+      x = 'CLR-normalized HTO expression',
+      y = 'Density'
+    )
+  if (is.finite(hto_threshold)) {
+    all_cell_histogram <- all_cell_histogram +
+      geom_vline(xintercept = hto_threshold, color = 'red', linewidth = 0.8)
+  }
+  print(all_cell_histogram)
+}
+```
+
+```{r hto-remove-negatives, eval=isTRUE(params$use_hashtag)}
+# Negatives lack a hashtag call and are always excluded (unusable identity).
+n_before_neg <- ncol(seurat)
+seurat <- subset(seurat, subset = HTO_class != 'Negative')
+cat('Removed', n_before_neg - ncol(seurat), 'HTO Negative cells;', ncol(seurat), 'remain (Singlet + Doublet).\n')
+```
+
+```{r hto-intra-sample-doublets, eval=isTRUE(params$use_hashtag), fig.height=5, fig.width=12}
+# Intra-sample doublets: same-hashtag doublets HTODemux can't catch, detected
+# via scDblFinder::recoverDoublets on an RNA PCA/UMAP restricted to this subset.
+if (!requireNamespace('scDblFinder', quietly = TRUE) || !requireNamespace('scater', quietly = TRUE) ||
+    !requireNamespace('gridExtra', quietly = TRUE)) {
+  cat('scDblFinder/scater/gridExtra not installed; skipping intra-sample doublet check.\n')
+  seurat$predicted_intra_sample_doublet <- FALSE
+} else {
+  hto_check <- seurat
+  DefaultAssay(hto_check) <- 'RNA'
+  hto_check <- NormalizeData(hto_check, assay = 'RNA', verbose = FALSE)
+  hto_check <- FindVariableFeatures(hto_check, assay = 'RNA', verbose = FALSE)
+  hto_check <- ScaleData(hto_check, assay = 'RNA', verbose = FALSE)
+  hto_check <- RunPCA(hto_check, assay = 'RNA', npcs = 30, verbose = FALSE, reduction.name = 'pca_hto_check')
+  hto_check <- RunUMAP(hto_check, reduction = 'pca_hto_check', dims = 1:30, verbose = FALSE, reduction.name = 'umap_hto_check')
+
+  hto_sce <- as.SingleCellExperiment(hto_check)
+  hto_dimreds <- resolve_hto_doublet_dimreds(SingleCellExperiment::reducedDimNames(hto_sce))
+  doublets_pred <- scDblFinder::recoverDoublets(
+    hto_sce,
+    use.dimred = hto_dimreds$pca,
+    doublets = (hto_sce$HTO_class == 'Doublet'),
+    samples = table(hto_sce$hash.ID)
+  )
+  hto_sce$predicted_intra_sample_doublet <- doublets_pred$predicted
+
+  seurat$predicted_intra_sample_doublet <- FALSE
+  seurat$predicted_intra_sample_doublet[colnames(hto_sce)] <- hto_sce$predicted_intra_sample_doublet
+
+  cat('Predicted intra-sample doublets:', sum(hto_sce$predicted_intra_sample_doublet), '/', ncol(hto_sce), '\n')
+
+  gridExtra::grid.arrange(
+    scater::plotUMAP(hto_sce, colour_by = 'HTO_class', dimred = hto_dimreds$umap) + ggtitle('Known HTO classification'),
+    scater::plotUMAP(hto_sce, colour_by = 'predicted_intra_sample_doublet', dimred = hto_dimreds$umap) + ggtitle('Predicted intra-sample doublets'),
+    ncol = 2
+  )
+}
+```
+
+```{r hto-filter-singlets, eval=isTRUE(params$use_hashtag)}
+n_before <- ncol(seurat)
+keep_singlets <- hto_singlet_keep_mask(seurat$HTO_class)
+seurat <- subset(seurat, cells = colnames(seurat)[keep_singlets])
+cat('Kept', ncol(seurat), 'of', n_before, 'cells classified as HTO Singlet (removed known HTO Doublets).\n')
+```
+
 # Cell and gene count prior to filtering
 Prints the Seurat object summary to record the number of cells and features entering the QC filtering step.
 
@@ -627,8 +935,12 @@ Prints the Seurat object summary to record the number of cells and features ente
 seurat
 ```
 
+```{r hto-cell-numbers, eval=isTRUE(params$use_hashtag)}
+table(seurat$hash.ID)
+```
+
 # Summary statistics
-Descriptive statistics for the three primary per-cell QC metrics. Review these distributions before choosing MAD-based filter multiples.
+Descriptive statistics for the primary per-cell QC metrics; ADT UMI statistics are included when ADT is enabled.
 
 ## UMI count
 Per-cell UMI count distribution. Very low values indicate empty droplets; very high values may indicate multiplets.
@@ -646,6 +958,10 @@ print(describe(seurat$nFeature_RNA))
 Proportion of reads mapping to mitochondrial genes. Elevated values indicate stressed, lysed, or low-quality cells.
 ```{r summary-mito}
 print(describe(seurat$percent.mt))
+```
+
+```{r summary-adt-count, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)}
+print(describe(seurat$nCount_ADT))
 ```
 
 # Median absolute deviation (MAD)-based filtering
@@ -670,27 +986,16 @@ cat('nCount_RNA   median =', nCount_RNA_med,   '| MAD =', nCount_RNA_mad,   '\n'
 cat('nFeature_RNA median =', nFeature_RNA_med, '| MAD =', nFeature_RNA_mad, '\n')
 cat('percent.mt   median =', percent.mt_med,   '| MAD =', percent.mt_mad,   '\n')
 
-# ── Helper: build threshold table for ±5 MADs ─────────────────────────────────
-# Returns one row per MAD multiple with the corresponding threshold value and
-# the fraction / count of cells that fall below or above it.
-build_mad_table <- function(values, med, mad) {
-  mad_lvl          <- 5:-5
-  my_ecdf          <- ecdf(values)
-  filter_threshold <- med + mad_lvl * mad
-  percentiles      <- my_ecdf(filter_threshold)
-  data.frame(
-    mad              = mad_lvl,
-    filter_threshold = filter_threshold,
-    percent_below    = percentiles,
-    cells_below      = percentiles * length(values),
-    percent_above    = 1 - percentiles,
-    cells_above      = (1 - percentiles) * length(values)
-  )
-}
-
 nCount_mad_thresh   <- build_mad_table(seurat$nCount_RNA,   nCount_RNA_med,   nCount_RNA_mad)
 nFeature_mad_thresh <- build_mad_table(seurat$nFeature_RNA, nFeature_RNA_med, nFeature_RNA_mad)
 percent.mt_mad_thresh <- build_mad_table(seurat$percent.mt, percent.mt_med,   percent.mt_mad)
+```
+
+```{r compute-mad-adt, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)}
+nCount_ADT_med <- median(seurat$nCount_ADT, na.rm = TRUE)
+nCount_ADT_mad <- median(abs(seurat$nCount_ADT - nCount_ADT_med), na.rm = TRUE)
+nCount_ADT_mad_thresh <- build_mad_table(seurat$nCount_ADT, nCount_ADT_med, nCount_ADT_mad)
+cat('nCount_ADT median =', nCount_ADT_med, '| MAD =', nCount_ADT_mad, '\n')
 ```
 
 ## UMI count filter table
@@ -699,6 +1004,12 @@ Each row shows the UMI threshold at a given MAD multiple with the fraction and c
 kable(nCount_mad_thresh, digits = 3,
       caption = 'MAD-based filtering thresholds – UMI count',
       align = c('l', 'c', 'c', 'c', 'c', 'c'))
+```
+
+```{r mad-table-adt, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)}
+kable(nCount_ADT_mad_thresh, digits = 3,
+  caption = 'MAD-based filtering thresholds – ADT UMI count',
+  align = c('l', 'c', 'c', 'c', 'c', 'c'))
 ```
 
 ## Genes detected filter table
@@ -740,6 +1051,9 @@ make_violin_refs <- function(med, mad, log_transform = TRUE) {
 umi_refs  <- make_violin_refs(nCount_RNA_med,   nCount_RNA_mad,   log_transform = TRUE)
 gene_refs <- make_violin_refs(nFeature_RNA_med, nFeature_RNA_mad, log_transform = TRUE)
 mt_refs   <- make_violin_refs(percent.mt_med,   percent.mt_mad,   log_transform = FALSE)
+if (isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)) {
+  adt_refs <- make_violin_refs(nCount_ADT_med, nCount_ADT_mad, log_transform = TRUE)
+}
 ```
 
 ```{r qc-violins-prefilter, fig.height=5, fig.width=12}
@@ -842,6 +1156,38 @@ gene_mito <- ggplot(seurat@meta.data,
              color = 'red', linetype = 'dashed', linewidth = 0.25)
 
 count_gene + count_mito + gene_mito
+```
+
+```{r qc-adt-violin-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat), fig.height=5, fig.width=6}
+ggplot(seurat@meta.data,
+       aes(y = log10(pmax(nCount_ADT, 1)), x = orig.ident, fill = orig.ident)) +
+  geom_violin() + theme_classic() +
+  scale_fill_manual(values = viridis(1)) + theme(legend.position = 'none') +
+  geom_segment(data = adt_refs,
+               aes(y = y, yend = y, x = 0.75, xend = 1.25, linetype = linetype),
+               color = 'red', linewidth = 0.5, inherit.aes = FALSE) +
+  scale_linetype_identity() +
+  labs(y = 'log10(ADT UMI count)')
+```
+
+```{r qc-adt-histogram-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat), fig.height=4, fig.width=8}
+ggplot(seurat@meta.data, aes(x = log10(pmax(nCount_ADT, 1)))) +
+  geom_histogram() + theme_classic() +
+  geom_vline(xintercept = log10(pmax(nCount_ADT_med, 1)), color = 'red') +
+  geom_vline(xintercept = log10(pmax(nCount_ADT_mad_thresh$filter_threshold[
+    nCount_ADT_mad_thresh$filter_threshold > 0], 1)),
+    color = 'red', linetype = 'dashed', linewidth = 0.5) +
+  labs(x = 'log10(ADT UMI count)')
+```
+
+```{r qc-adt-scatter-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat), fig.height=5, fig.width=7}
+ggplot(seurat@meta.data,
+       aes(x = log10(pmax(nCount_RNA, 1)), y = log10(pmax(nCount_ADT, 1)))) +
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = log10(pmax(nCount_RNA_med, 1)), color = 'red') +
+  geom_hline(yintercept = log10(pmax(nCount_ADT_med, 1)), color = 'red') +
+  theme_classic() +
+  labs(x = 'log10(RNA UMI count)', y = 'log10(ADT UMI count)')
 ```
 
 ## Ribosomal and complexity metrics
@@ -1005,7 +1351,7 @@ print(describe(seurat$percent.rbc))
 ```
 
 # Filter
-Applies per-metric thresholds to remove low-quality cells. Uses hard thresholds from `params` if provided (non-`NA`); otherwise falls back to MAD-based defaults (−4 MADs for count/gene lower bounds, +5 MADs for mitochondrial upper bound). MALAT1 filtering is applied on the normalised `data` layer and skipped if the gene is absent.
+Applies per-metric RNA and optional ADT thresholds to remove low-quality cells. Uses hard thresholds from `params` if provided (non-`NA`); otherwise falls back to MAD-based defaults (−4 MADs for count/gene lower bounds, +5 MADs for mitochondrial upper bound). MALAT1 filtering is applied on the normalised `data` layer and skipped if the gene is absent.
 
 ```{r apply-filter}
 # ── Resolve filter thresholds ──────────────────────────────────────────────────
@@ -1039,6 +1385,24 @@ cat('  nFeature_RNA :', thresh_min_nFeature, '–', thresh_max_nFeature, '\n')
 cat('  percent.mt   : <=', thresh_max_mt,  '\n')
 cat('  MALAT1 (norm): >', thresh_min_malat1, '\n')
 
+has_adt_qc <- isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)
+if (has_adt_qc) {
+  adt_count_thresholds <- resolve_adt_count_thresholds(
+    seurat$nCount_ADT,
+    min_override = params$min_nCount_ADT,
+    max_override = params$max_nCount_ADT
+  )
+  pass_nCount_ADT <- adt_count_keep_mask(
+    seurat$nCount_ADT,
+    adt_count_thresholds$min,
+    adt_count_thresholds$max
+  )
+  cat('  nCount_ADT   :', adt_count_thresholds$min, '–', adt_count_thresholds$max, '\n')
+} else {
+  pass_nCount_ADT <- rep(TRUE, ncol(seurat))
+  cat('  nCount_ADT   : not applicable\n')
+}
+
 # Log pass counts per criterion to make over-filtering easier to diagnose.
 pass_nCount_min <- seurat$nCount_RNA >  thresh_min_nCount
 pass_nCount_max <- seurat$nCount_RNA <= thresh_max_nCount
@@ -1052,18 +1416,15 @@ cat('  nCount_RNA   <= max:', sum(pass_nCount_max), '/', length(pass_nCount_max)
 cat('  nFeature_RNA > min :', sum(pass_nFeat_min),  '/', length(pass_nFeat_min),  '\n')
 cat('  nFeature_RNA <= max:', sum(pass_nFeat_max),  '/', length(pass_nFeat_max),  '\n')
 cat('  percent.mt   <= max:', sum(pass_mt_max),     '/', length(pass_mt_max),     '\n')
+cat('  nCount_ADT   in range:', sum(pass_nCount_ADT), '/', length(pass_nCount_ADT), '\n')
 
 # ── Apply filter ───────────────────────────────────────────────────────────────
-seurat <- subset(
-  seurat,
-  nCount_RNA   >  0                 &
-  nFeature_RNA >  0                 &
-  nCount_RNA   >  thresh_min_nCount   &
-  nCount_RNA   <= thresh_max_nCount   &
-  nFeature_RNA >  thresh_min_nFeature &
-  nFeature_RNA <= thresh_max_nFeature &
-  (is.na(percent.mt) | percent.mt <= thresh_max_mt)
-)
+keep_cells <- colnames(seurat)[
+  seurat$nCount_RNA > 0 & seurat$nFeature_RNA > 0 &
+    pass_nCount_min & pass_nCount_max & pass_nFeat_min & pass_nFeat_max &
+    pass_mt_max & pass_nCount_ADT
+]
+seurat <- subset(seurat, cells = keep_cells)
 if (!is.na(malat1_feature)) {
   malat_vals <- Seurat::FetchData(seurat, vars = malat1_feature, layer = 'data')[, 1]
   keep_cells <- names(malat_vals)[malat_vals > thresh_min_malat1]
@@ -1668,6 +2029,127 @@ build_top_marker_heatmap(
   layer_name = 'data',
   title_text = 'Top marker heatmap (SCTransform normalisation)'
 )
+```
+
+```{r adt-section-header, results='asis', echo=FALSE}
+if (isTRUE(params$use_adt)) {
+  cat(
+    '# CITE-seq (ADT) processing\n\n',
+    'Normalizes CITE-seq surface protein (ADT) counts with `dsb`, using empty ',
+    'droplets from the raw matrix as background, and visualizes normalized ',
+    'antibody levels across RNA/SCT clusters.\n\n',
+    sep = ''
+  )
+}
+```
+
+```{r adt-background-diagnostic, eval=isTRUE(params$use_adt), fig.height=5, fig.width=8}
+if (is.null(adt_matrix_raw)) {
+  cat('No raw ADT matrix available; skipping ADT background diagnostic.\n')
+} else {
+  common_raw_barcodes <- intersect(colnames(raw_matrix), colnames(adt_matrix_raw))
+  mt_rows <- rownames(raw_matrix)[grepl(mt_pattern, rownames(raw_matrix))]
+  md <- data.frame(
+    rna.size  = log10(pmax(Matrix::colSums(raw_matrix[, common_raw_barcodes, drop = FALSE]), 1)),
+    prot.size = log10(pmax(Matrix::colSums(adt_matrix_raw[, common_raw_barcodes, drop = FALSE]), 1)),
+    mt.prop   = Matrix::colSums(raw_matrix[mt_rows, common_raw_barcodes, drop = FALSE]) /
+                pmax(Matrix::colSums(raw_matrix[, common_raw_barcodes, drop = FALSE]), 1),
+    row.names = common_raw_barcodes
+  )
+  md$drop.class <- ifelse(rownames(md) %in% colnames(seurat), 'cell', 'background')
+
+  ggplot(md, aes(x = prot.size, y = rna.size, color = mt.prop)) +
+    geom_point(size = 0.5) +
+    scale_color_viridis_c() +
+    theme_classic() +
+    facet_wrap(~drop.class) +
+    ggtitle('DSB background diagnostic: RNA vs ADT size by droplet class')
+}
+```
+
+```{r adt-dsb-normalize, eval=isTRUE(params$use_adt)}
+if (!requireNamespace('dsb', quietly = TRUE)) {
+  cat('dsb package not installed; skipping ADT normalization.\n')
+} else if (is.null(adt_matrix_raw)) {
+  cat('No raw ADT matrix available; skipping ADT normalization.\n')
+} else {
+  common_raw_barcodes <- intersect(colnames(raw_matrix), colnames(adt_matrix_raw))
+  rna.size  <- log10(pmax(Matrix::colSums(raw_matrix[, common_raw_barcodes, drop = FALSE]), 1))
+  prot.size <- log10(pmax(Matrix::colSums(adt_matrix_raw[, common_raw_barcodes, drop = FALSE]), 1))
+  is_background <- !(common_raw_barcodes %in% colnames(seurat))
+
+  bg_rna_max  <- if (!is.na(params$dsb_background_rna_max))  params$dsb_background_rna_max  else stats::median(rna.size[is_background])
+  bg_prot_min <- if (!is.na(params$dsb_background_prot_min)) params$dsb_background_prot_min else stats::quantile(prot.size[is_background], 0.01, names = FALSE)
+  bg_prot_max <- if (!is.na(params$dsb_background_prot_max)) params$dsb_background_prot_max else stats::quantile(prot.size[is_background], 0.99, names = FALSE)
+
+  background_barcodes <- common_raw_barcodes[
+    is_background & rna.size <= bg_rna_max & prot.size >= bg_prot_min & prot.size <= bg_prot_max
+  ]
+  cat('DSB background droplets:', length(background_barcodes),
+      '(rna.size <=', signif(bg_rna_max, 3), ', prot.size in [', signif(bg_prot_min, 3), ',', signif(bg_prot_max, 3), '])\n')
+
+  if (length(background_barcodes) < 10) {
+    cat('Fewer than 10 background droplets resolved; skipping DSB normalization.\n')
+  } else {
+    cell_protein_matrix <- as.matrix(GetAssayData(seurat, assay = 'ADT', layer = 'counts'))
+    empty_drop_matrix   <- as.matrix(adt_matrix_raw[rownames(cell_protein_matrix), background_barcodes, drop = FALSE])
+    isotype_controls    <- rownames(cell_protein_matrix)[grepl('Isotype', rownames(cell_protein_matrix), ignore.case = TRUE)]
+    use_isotype_control <- length(isotype_controls) > 0
+
+    dsb_out <- dsb::DSBNormalizeProtein(
+      cell_protein_matrix     = cell_protein_matrix,
+      empty_drop_matrix       = empty_drop_matrix,
+      denoise.counts          = TRUE,
+      use.isotype.control     = use_isotype_control,
+      isotype.control.name.vec = if (use_isotype_control) isotype_controls else NULL
+    )
+
+    seurat[['ADT_DSB']] <- CreateAssayObject(data = dsb_out)
+    cat('Isotype controls used for denoising:', if (use_isotype_control) paste(isotype_controls, collapse = ', ') else 'none detected', '\n')
+    cat('ADT_DSB assay created with', nrow(dsb_out), 'features.\n')
+  }
+}
+```
+
+```{r adt-qc-plots, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% Assays(seurat)), fig.height=6, fig.width=10}
+adt_features <- rownames(seurat[['ADT_DSB']])
+raw_adt_totals <- Matrix::colSums(GetAssayData(seurat, assay = 'ADT', layer = 'counts'))
+
+ggplot(data.frame(nCount_RNA = seurat$nCount_RNA, nCount_ADT = raw_adt_totals),
+       aes(x = nCount_RNA, y = nCount_ADT)) +
+  geom_point(size = 0.5, alpha = 0.5) +
+  scale_x_log10() + scale_y_log10() +
+  theme_classic() +
+  ggtitle('Total ADT UMI vs total RNA UMI per cell')
+
+VlnPlot(seurat, features = adt_features[seq_len(min(6, length(adt_features)))],
+        assay = 'ADT_DSB', layer = 'data', pt.size = 0, ncol = 3) &
+  theme(legend.position = 'none')
+
+DefaultAssay(seurat) <- 'ADT_DSB'
+print(FeaturePlot(seurat, features = adt_features[seq_len(min(4, length(adt_features)))],
+                   reduction = 'umap_rna', ncol = 2) & scale_color_viridis_c())
+DefaultAssay(seurat) <- 'RNA'
+```
+
+```{r adt-cluster-heatmap, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% Assays(seurat)), fig.height=10, fig.width=8}
+# Average DSB-normalized ADT expression per SCT cluster (no marker test needed);
+# reuses the myColor/myBreaks palette defined in the marker-heatmap chunk above.
+adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'seurat_clusters_sct')
+adt_mat <- adt_avg[['ADT_DSB']]
+if (nrow(adt_mat) > 0 && ncol(adt_mat) > 0) {
+  pheatmap::pheatmap(
+    adt_mat,
+    scale = 'row',
+    color = myColor,
+    border_color = NULL,
+    breaks = myBreaks,
+    fontsize = 6,
+    main = 'DSB-normalized average ADT expression per cluster (SCT clusters)'
+  )
+} else {
+  cat('Empty ADT average expression matrix; skipping heatmap.\n')
+}
 ```
 
 # Doublet detection

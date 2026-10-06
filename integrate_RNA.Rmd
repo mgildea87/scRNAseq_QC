@@ -663,3 +663,61 @@ if (length(lisi_tables) < 2L) {
 }
 ```
 
+```{r hto-adt-section-header, results='asis', echo=FALSE}
+has_hto <- 'HTO' %in% Assays(seurat)
+has_adt <- 'ADT_DSB' %in% Assays(seurat)
+if (has_hto || has_adt) {
+  cat('# Hashtag / CITE-seq summary (integrated)\n\n',
+      'Additive summary of HTO classification and DSB-normalized ADT levels in ',
+      'the integrated object. Skipped entirely when no sample used these features.\n\n',
+      sep = '')
+}
+```
+
+```{r hto-summary-integrated, eval='HTO' %in% Assays(seurat), fig.height=6, fig.width=10, warning=F, message=F}
+if ('HTO_class' %in% colnames(seurat@meta.data)) {
+  cat('HTO classification counts by sample:\n')
+  print(table(seurat$sample_name, seurat$HTO_class))
+} else {
+  cat('HTO assay present but HTO_class metadata not found; skipping HTO summary.\n')
+}
+```
+
+```{r adt-summary-integrated, eval='ADT_DSB' %in% Assays(seurat), fig.height=10, fig.width=8, warning=F, message=F}
+adt_features <- rownames(seurat[['ADT_DSB']])
+cluster_col <- if ('SCT_integrated_clusters_0.75' %in% colnames(seurat@meta.data)) {
+  'SCT_integrated_clusters_0.75'
+} else if ('RNA_integrated_clusters_0.75' %in% colnames(seurat@meta.data)) {
+  'RNA_integrated_clusters_0.75'
+} else {
+  NA_character_
+}
+
+if (is.na(cluster_col)) {
+  cat('No integrated cluster metadata found; skipping ADT per-cluster heatmap.\n')
+} else {
+  adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = cluster_col)
+  adt_mat <- adt_avg[['ADT_DSB']]
+  if (nrow(adt_mat) > 0 && ncol(adt_mat) > 0) {
+    paletteLength <- 50
+    myColor  <- colorRampPalette(c('blue', 'white', 'red'))(paletteLength)
+    myBreaks <- c(seq(-3, 0, length.out = ceiling(paletteLength / 2) + 1),
+                  seq(3 / paletteLength, 3, length.out = floor(paletteLength / 2)))
+    pheatmap::pheatmap(
+      adt_mat,
+      scale = 'row',
+      color = myColor,
+      breaks = myBreaks,
+      fontsize = 6,
+      main = paste('DSB-normalized average ADT expression per cluster (', cluster_col, ')', sep = '')
+    )
+  } else {
+    cat('Empty ADT average expression matrix; skipping heatmap.\n')
+  }
+}
+
+VlnPlot(seurat, features = adt_features[seq_len(min(6, length(adt_features)))],
+        assay = 'ADT_DSB', layer = 'data', group.by = 'sample_name', pt.size = 0, ncol = 2) &
+  theme(legend.position = 'none')
+```
+

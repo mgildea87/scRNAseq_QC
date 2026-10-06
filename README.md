@@ -83,48 +83,86 @@ BiocManager::install(c("Seurat", "scater", "scDblFinder"))
 # For graph modularity diagnostics (pairwiseModularity)
 BiocManager::install("bluster")
 
+# For optional hashtag (HTO) demultiplexing / CITE-seq (ADT) support
+install.packages(c("dsb", "gridExtra"))
+
 # From GitHub / internal
 remotes::install_github("immunogenomics/presto")
 # CVRCFunc — install from internal source as needed
 ```
 
+For local development tests, also install `testthat`:
+
+```r
+install.packages("testthat")
+```
+
+Run the focused local suite from the repository root with
+`Rscript --vanilla tests/testthat.R`. Full CellRanger report renders and SLURM
+submission are manual HPC checks and are not part of this fast local suite.
+See [tests/README.md](tests/README.md) for per-file coverage, prerequisites,
+and the manual cluster smoke checks.
+
 ---
 
 ## Sample sheet (`samples.csv`)
 
-The sample sheet is a CSV file with the following columns:
+The sample sheet is a transposed CSV: the first column is `field`, each
+remaining column is one sample, and each following row is a setting. This
+keeps each sample's settings in a vertical spreadsheet column. The `sample_name`
+row must exactly match the corresponding sample column header.
 
-| Column | Required | Description |
-|--------|----------|-------------|
-| `sample_name` | Yes | Unique label used for output filenames |
+| Field row | Required | Description |
+|-----------|----------|-------------|
+| `sample_name` | Yes | Must match the sample column header; used for output filenames |
 | `filtered_path` | Yes | Path to the filtered matrix directory or `.h5` file for that sample |
 | `raw_path` | Yes | Path to the raw matrix directory or `.h5` file for that sample |
-| `batch` | No | Batch label stored in the per-sample Seurat object metadata (defaults to `A` if omitted or blank) |
-| `min_nCount_RNA` | No | Hard lower bound on UMI count per cell |
-| `max_nCount_RNA` | No | Hard upper bound on UMI count per cell |
-| `min_nFeature_RNA` | No | Hard lower bound on genes detected per cell |
-| `max_nFeature_RNA` | No | Hard upper bound on genes detected per cell |
-| `max_percent_mt` | No | Hard upper bound on mitochondrial read fraction (%) |
+| `batch` | No | Batch label in Seurat metadata (defaults to `A` if omitted or blank) |
+| `min_nCount_RNA` / `max_nCount_RNA` | No | Lower/upper RNA UMI bounds; `NA` uses MAD minimum or no upper cap |
+| `min_nFeature_RNA` / `max_nFeature_RNA` | No | Lower/upper detected-gene bounds; `NA` uses MAD minimum or no upper cap |
+| `max_percent_mt` | No | Upper mitochondrial fraction bound; `NA` uses median + 5 × MAD |
 | `min_malat1` | No | Minimum normalised MALAT1 expression (default 1) |
+| `use_hashtag` | No | `TRUE` enables HTO loading and demultiplexing for this sample (default `FALSE`) |
+| `use_adt` | No | `TRUE` enables ADT loading and DSB normalization for this sample (default `FALSE`) |
+| `feature_reference_path` | Required when HTO or ADT enabled with "name" column specifying feature names | CellRanger `feature_reference.csv`; required even when separate HTO/ADT paths are provided |
+| `hto_path` | No | Direct path to a separate filtered HTO matrix (10x MEX directory or `.h5`); takes priority over matrix splitting |
+| `adt_path` | No | Direct path to a separate filtered ADT matrix; takes priority over matrix splitting |
+| `raw_adt_path` | When ADT enabled | Required direct path to the raw ADT matrix used for DSB empty-droplet background; barcodes must match `raw_path` |
+| `hto_features` | For combined HTO/ADT matrix | Exact HTO names from the reference `name` column, separated by `;` or `,` |
+| `min_nCount_ADT` / `max_nCount_ADT` | No | Lower/upper ADT UMI bounds; `NA` uses MAD minimum or no upper cap; only applies when ADT is enabled |
+| `dsb_background_rna_max` | No | Override for maximum log10(RNA UMI) among empty-droplet background barcodes |
+| `dsb_background_prot_min` / `dsb_background_prot_max` | No | Overrides for the log10(ADT UMI) band defining empty-droplet background barcodes |
 
-Set any threshold column to `NA` (or omit the column entirely) to use the
-automatic **MAD-based default** for that metric.  
-The MAD defaults are:
+Set a threshold to `NA` (or omit its field row) to use the automatic default:
 
-- `min_nCount_RNA` / `min_nFeature_RNA` → median − 4 × MAD  
-- `max_nCount_RNA` / `max_nFeature_RNA` → no upper cap (Inf)  
-- `max_percent_mt` → median + 5 × MAD  
-- `min_malat1` → 1  
+- `min_nCount_RNA`, `min_nFeature_RNA`, and `min_nCount_ADT`: median − 4 × MAD
+- `max_nCount_RNA`, `max_nFeature_RNA`, and `max_nCount_ADT`: no upper cap
+- `max_percent_mt`: median + 5 × MAD
+- `min_malat1`: 1
 
 ### Example
 
 ```csv
-sample_name,filtered_path,raw_path,batch,min_nCount_RNA,max_nCount_RNA,min_nFeature_RNA,max_nFeature_RNA,max_percent_mt,min_malat1
-Control_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A,NA,NA,NA,NA,NA,1
-Treatment_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A,500,25000,250,6000,20,1
+field,Control_1,Treatment_1
+sample_name,Control_1,Treatment_1
+filtered_path,/path/to/Control/filtered_feature_bc_matrix,/path/to/Treatment/filtered_feature_bc_matrix
+raw_path,/path/to/Control/raw_feature_bc_matrix,/path/to/Treatment/raw_feature_bc_matrix
+batch,A,A
+min_nCount_RNA,NA,500
+max_nCount_RNA,NA,25000
+min_nFeature_RNA,NA,250
+max_nFeature_RNA,NA,6000
+max_percent_mt,NA,20
+min_malat1,1,1
+use_hashtag,FALSE,FALSE
+use_adt,FALSE,FALSE
+min_nCount_ADT,NA,NA
+max_nCount_ADT,NA,NA
 ```
 
-`Control_1` uses all MAD-based defaults. `Treatment_1` uses hardcoded thresholds.
+`Control_1` uses automatic MAD thresholds. `Treatment_1` uses explicit RNA
+thresholds. In spreadsheet software, add a sample by adding a new column and
+filling in its field values.
 
 For `.h5` inputs, `filtered_path` and `raw_path` must point to the file itself, not the folder that contains it. For 10x MEX inputs, the path must point to the matrix directory that contains `matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and `features.tsv(.gz)` or `genes.tsv(.gz)`.
 
@@ -137,6 +175,102 @@ Supported input formats:
 
 For `.h5` inputs, the QC template currently expects one scRNA matrix per file.
 CellBender filtered input is opt-in via `--use_cellbender TRUE`.
+
+---
+
+## Hashtag demultiplexing / CITE-seq (ADT)
+
+Both features are opt-in per sample (`use_hashtag`, `use_adt` in `samples.csv`)
+and disabled by default, leaving the RNA-only analysis path unchanged. The
+sample-sheet format is now transposed; convert older row-per-sample CSV sheets
+before running this version.
+
+### Input formats
+
+HTO and ADT data usually arrive as one CellRanger `multi`/feature-barcoded
+`filtered_feature_bc_matrix` / `raw_feature_bc_matrix`, where `Read10X()`
+returns a named list keyed by feature type (`Gene Expression`, `Antibody
+Capture`, sometimes `Multiplexing Capture`). HTO and ADT features are
+frequently combined inside one `Antibody Capture` matrix. When either feature
+is enabled, `feature_reference_path` is required and loaded before matrix
+resolution. For a combined matrix, the reference's `name` column is
+canonical and must match matrix feature rownames: `hto_features` lists exact
+HTO names, and all remaining reference names are treated as ADT. Missing
+reference names or HTO names are errors; `id` and `feature_type` are not used
+to classify antibody features.
+
+When HTO counts are in a separate named matrix within the filtered input,
+`Multiplexing Capture` is recognized automatically (case-insensitively). For
+HTO and ADT rows combined in `Antibody Capture`, set `hto_features` to the
+exact HTO names from the feature reference's `name` column; remaining
+reference names are treated as ADT. Other feature-type names (for example,
+`hto_matrix`) are not automatically searched. If the HTO matrix is a separate
+file, provide it through `hto_path`.
+
+Separate matrices remain supported: `hto_path` and `adt_path`, when set,
+override resolution for the filtered assay and may point to a standalone
+single-modality MEX or `.h5` file. CellRanger's native `Multiplexing Capture`
+matrix can also supply HTO counts. When ADT is enabled, `raw_adt_path` is
+required and must point to the raw ADT matrix used for DSB empty-droplet
+background; there is no fallback to `raw_path`. Filtered and raw ADT barcodes
+must match for DSB. The `feature_reference_path` is still required when HTO
+or ADT processing is enabled, including when separate paths are used.
+
+### Hashtag (HTO) demultiplexing
+
+When `use_hashtag` is TRUE, `sample_QC.Rmd` adds a "Hashtag demultiplexing"
+section that:
+
+- CLR-normalizes the `HTO` assay and runs `HTODemux` with a fixed
+  `positive.quantile` of 0.99.
+- Adds `HTO_sample` (= `hash.ID`), `HTO_class` (= classification global call),
+  and `replicate_id` (= `<sample_name>_<hash.ID>`) before filtering; the saved
+  object contains Singlet cells only.
+- Shows diagnostic QC plots (`HTOHeatmap`, `RidgePlot`, per-HTO density plots,
+  and all-cell CLR density histograms). Each histogram's red line marks the
+  minimum CLR expression among cells assigned as Singlets for that HTO; it is
+  diagnostic only and does not change the HTODemux classifications.
+- Removes HTO `Negative` cells, runs `scDblFinder::recoverDoublets` on an RNA
+  PCA/UMAP of the remaining Singlet+Doublet subset (requires
+  `scDblFinder`/`scater`/`gridExtra`), then retains Singlets only before RNA
+  filtering/clustering. The intra-sample doublet prediction is retained as
+  metadata on the saved Singlet cells.
+
+**`sample_name` vs `library_id` semantics:** for hashtagged samples,
+`qc_batch_runner.R`'s merge step keeps `library_id` = the pooled library name
+from `samples.csv`, while `sample_name` in the merged object becomes the
+per-cell `HTO_sample` (biological identity from the hashtag call) instead of
+being overwritten with the library name. Non-hashtagged samples are
+unaffected (`sample_name` == `library_id` == the sample-sheet name).
+
+### CITE-seq (ADT) processing
+
+When `use_adt` is TRUE, ADT count QC runs with the pre-filter RNA metrics.
+The separate "CITE-seq (ADT) processing" report section appears after RNA QC
+filtering, once RNA/SCT clustering and UMAPs exist, and:
+
+- Includes `min_nCount_ADT`/`max_nCount_ADT` in the pre-filter summary, MAD
+  threshold table and QC plots, then applies them with the RNA filters. `NA`
+  minimum uses median − 4 × MAD; `NA` maximum means no upper cap.
+- Computes a biaxial RNA-size vs ADT-size diagnostic (colored by
+  mitochondrial fraction, faceted by cell/background droplet class) to help
+  judge whether the default empty-droplet background selection is
+  appropriate; override with `dsb_background_rna_max`,
+  `dsb_background_prot_min`/`dsb_background_prot_max` if not.
+- Runs `dsb::DSBNormalizeProtein()` using the raw matrix's empty droplets as
+  background, with isotype controls auto-detected by name pattern
+  (`Isotype`, case-insensitive) when present.
+- Stores DSB-normalized values in a **separate `ADT_DSB` assay** (`data` slot
+  only) — the raw `ADT` counts assay is left untouched.
+- Shows per-ADT violin/ridge plots, an ADT-vs-RNA UMI scatter, `FeaturePlot`
+  of ADT markers on the existing RNA UMAP, and a DSB-normalized
+  average-ADT-per-cluster heatmap.
+
+Both `HTO` and `ADT_DSB` assays, and all associated metadata, propagate
+automatically through `merge()`/`SCTransform`/RPCA — `merge_analysis.Rmd` and
+`integrate_RNA.Rmd` render small additive, presence-gated summary sections
+for them and are otherwise unaffected for pipelines that don't use these
+features.
 
 > **Tip:** Run the pipeline on each sample with default thresholds first,
 > inspect the QC reports, then rerun with hardcoded thresholds for any samples
@@ -166,8 +300,8 @@ performed automatically after all samples complete successfully. To skip this,
 set `--skip_merge TRUE`.
 
 To run the optional post-merge integration report template (`integrate_RNA.Rmd`)
-after a successful merge, set `--run_integration TRUE` and provide
-`--integration_level Batch` or `--integration_level Sample`.
+after a successful merge, set `--run_integration TRUE`. The integration level
+defaults to `Sample`; pass `--integration_level Batch` to use batch grouping.
 
 ```bash
 bash /path/to/templates/QC/run_qc_batch_local.sh \
@@ -199,8 +333,7 @@ bash /path/to/templates/QC/run_qc_batch_local.sh \
 bash /path/to/templates/QC/run_qc_batch_local.sh \
   --sample_sheet      /abs/path/to/samples.csv \
   --output_dir        /abs/path/to/results/QC \
-  --integration_only  TRUE \
-  --integration_level Sample
+  --integration_only  TRUE
 ```
 
 ### One sample manually (RStudio or R console)
@@ -261,13 +394,14 @@ To skip all per-sample QC jobs and run only merge/report generation from
 existing `<sample_name>_QC.rds` files, pass `--merge_only TRUE`.
 
 To run the optional integration report after merge in the merge job, pass
-`--run_integration TRUE --integration_level Batch` (or `Sample`).
+`--run_integration TRUE`. The integration level defaults to `Sample`; pass
+`--integration_level Batch` to use batch grouping.
 
 This also works with `--merge_only TRUE`: integration will run after merge,
 but only when merge succeeds and the sample sheet contains at least 2 samples.
 
 To run only the integration stage on an existing merged object, pass
-`--integration_only TRUE --integration_level Batch` (or `Sample`).
+`--integration_only TRUE`; the integration level defaults to `Sample`.
 
 > Use **absolute paths** for `--sample_sheet` and `--output_dir` — each sample
 > runs as a separate job on a compute node where relative paths may not resolve.
@@ -287,17 +421,17 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 | `--merge_only` | `FALSE` | Skip per-sample QC jobs and submit only merge/report generation from existing per-sample RDS files |
 | `--skip_merge` | `FALSE` | Skip the post-sample merge step (`merged_QC.rds` and `merge_analysis.html`) |
 | `--run_integration` | `FALSE` | Run optional post-merge integration report (`integrate_RNA.Rmd`); works with `--merge_only TRUE` after successful merge (requires at least 2 samples) |
-| `--integration_level` | *(required when integration runs)* | Integration grouping level: `Batch` or `Sample` |
+| `--integration_level` | `Sample` | Integration grouping level: `Batch` or `Sample` |
 | `--integration_only` | `FALSE` | Skip sample QC and merge; run only `integrate_RNA.Rmd` using existing `merged_QC.rds` |
-| `--time` | `12:00:00` | Wall time per job — max on `cpu_short` is `12:00:00` |
+| `--time` | `2:00:00` | Wall time per job — max on `cpu_short` is `12:00:00` |
 
 #### Flag compatibility
 
 Valid combinations:
 
-- `--merge_only TRUE --run_integration TRUE --integration_level Batch|Sample`: runs merge from existing per-sample RDS files, then runs integration if merge succeeds (requires at least 2 samples in the sample sheet).
+- `--merge_only TRUE --run_integration TRUE [--integration_level Batch|Sample]`: runs merge from existing per-sample RDS files, then runs integration if merge succeeds (requires at least 2 samples in the sample sheet); the level defaults to `Sample`.
 - `--merge_only TRUE`: runs merge/report generation only from existing per-sample RDS files.
-- `--integration_only TRUE --integration_level Batch|Sample`: skips sample QC and merge, runs integration from an existing `merged_QC.rds`.
+- `--integration_only TRUE [--integration_level Batch|Sample]`: skips sample QC and merge, runs integration from an existing `merged_QC.rds`; the level defaults to `Sample`.
 - `--skip_merge TRUE`: runs per-sample QC jobs only and does not submit a merge job.
 
 Invalid combinations:

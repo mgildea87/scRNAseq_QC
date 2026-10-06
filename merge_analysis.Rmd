@@ -696,3 +696,71 @@ if (nrow(doublet_runs) == 0) {
   }
 }
 ```
+
+```{r hto-adt-section-header, results='asis', echo=FALSE}
+has_hto <- 'HTO' %in% Assays(seurat)
+has_adt <- 'ADT_DSB' %in% Assays(seurat)
+if (has_hto || has_adt) {
+  cat('# Hashtag / CITE-seq summary (merged)\n\n',
+      'Additive summary of HTO classification and DSB-normalized ADT levels ',
+      'for samples that used hashtag demultiplexing / CITE-seq. Skipped entirely ',
+      'when no sample in the merged object used these features.\n\n', sep = '')
+}
+```
+
+```{r hto-summary-merged, eval='HTO' %in% Assays(seurat), fig.height=6, fig.width=10, warning=F, message=F}
+if ('HTO_class' %in% colnames(seurat@meta.data)) {
+  cat('HTO classification counts by library:\n')
+  print(table(seurat$library_id, seurat$HTO_class))
+
+  hto_prop <- as.data.frame(prop.table(table(seurat$library_id, seurat$HTO_class), margin = 1))
+  colnames(hto_prop) <- c('library_id', 'HTO_class', 'fraction')
+  print(
+    ggplot(hto_prop, aes(x = library_id, y = fraction, fill = HTO_class)) +
+      geom_col(position = 'stack') +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      ggtitle('HTO classification fraction by library')
+  )
+} else {
+  cat('HTO assay present but HTO_class metadata not found; skipping HTO summary.\n')
+}
+```
+
+```{r adt-summary-merged, eval='ADT_DSB' %in% Assays(seurat), fig.height=10, fig.width=8, warning=F, message=F}
+adt_features <- rownames(seurat[['ADT_DSB']])
+cluster_col <- if ('seurat_clusters_sct_merged' %in% colnames(seurat@meta.data)) {
+  'seurat_clusters_sct_merged'
+} else if ('seurat_clusters_merged' %in% colnames(seurat@meta.data)) {
+  'seurat_clusters_merged'
+} else {
+  NA_character_
+}
+
+if (is.na(cluster_col)) {
+  cat('No merged cluster metadata found; skipping ADT per-cluster heatmap.\n')
+} else {
+  adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = cluster_col)
+  adt_mat <- adt_avg[['ADT_DSB']]
+  if (nrow(adt_mat) > 0 && ncol(adt_mat) > 0) {
+    paletteLength <- 50
+    myColor  <- colorRampPalette(c('blue', 'white', 'red'))(paletteLength)
+    myBreaks <- c(seq(-3, 0, length.out = ceiling(paletteLength / 2) + 1),
+                  seq(3 / paletteLength, 3, length.out = floor(paletteLength / 2)))
+    pheatmap::pheatmap(
+      adt_mat,
+      scale = 'row',
+      color = myColor,
+      breaks = myBreaks,
+      fontsize = 6,
+      main = paste('DSB-normalized average ADT expression per cluster (', cluster_col, ')', sep = '')
+    )
+  } else {
+    cat('Empty ADT average expression matrix; skipping heatmap.\n')
+  }
+}
+
+VlnPlot(seurat, features = adt_features[seq_len(min(6, length(adt_features)))],
+        assay = 'ADT_DSB', layer = 'data', group.by = 'library_id', pt.size = 0, ncol = 2) &
+  theme(legend.position = 'none')
+```

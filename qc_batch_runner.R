@@ -7,13 +7,21 @@
 # USAGE (interactive or on a compute node):
 #   Rscript qc_batch_runner.R --sample_sheet samples.csv --output_dir results/QC
 #
-# SAMPLE SHEET FORMAT (CSV, with header):
-#   sample_name,filtered_path,raw_path,batch
-#   Control_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A
-#   Treatment_1,/path/to/filtered_feature_bc_matrix,/path/to/raw_feature_bc_matrix,A
+# SAMPLE SHEET FORMAT (transposed CSV):
+#   field,Control_1,Treatment_1
+#   sample_name,Control_1,Treatment_1
+#   filtered_path,/path/to/Control/filtered,/path/to/Treatment/filtered
+#   raw_path,/path/to/Control/raw,/path/to/Treatment/raw
+#   batch,A,A
 #
 # The pipeline now expects explicit matrix paths in the sample sheet.
 # Each path should point directly to a 10x MEX directory or a 10x .h5/.hdf5 file.
+#
+# Optional per-sample hashtag (HTO) / CITE-seq (ADT) fields: use_hashtag,
+# use_adt, feature_reference_path, hto_path, adt_path, raw_adt_path,
+# hto_features,
+# min_nCount_ADT, max_nCount_ADT, dsb_background_rna_max,
+# dsb_background_prot_min, dsb_background_prot_max. See README.md for details.
 #
 # OPTIONAL ARGUMENTS:
 #   --template      Path to the .Rmd template
@@ -31,7 +39,7 @@
 #                   (default: same directory as this script)
 #   --integration_only If TRUE, run only integration on an existing
 #                   merged_QC.rds (default: FALSE)
-#   --integration_level Required when integration runs: Batch or Sample
+#   --integration_level Integration grouping level: Batch or Sample (default: Sample)
 #   --use_cellbender If TRUE, prefer/require cellbender_filtered.h5 for
 #                   filtered input resolution (default: FALSE)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +55,7 @@ print_usage_and_exit <- function(status = 0L) {
     "Usage:\n",
     "  Rscript qc_batch_runner.R --sample_sheet <file.csv> [options]\n\n",
     "Options:\n",
-    "  --sample_sheet <path>   Path to CSV sample sheet [required]\n",
+    "  --sample_sheet <path>   Path to transposed CSV sample sheet [required]\n",
     "  --output_dir <path>     Directory for HTML reports and RDS files [default: QC]\n",
     "  --template <path>       Path to sample_QC.Rmd [default: same dir as script]\n",
     "  --merge_template <path> Path to merge_analysis.Rmd [default: same dir as script]\n",
@@ -58,7 +66,7 @@ print_usage_and_exit <- function(status = 0L) {
     "  --run_integration <TRUE/FALSE> Run integration and render integration report after successful merge [default: FALSE]\n",
     "  --integration_template <path> Path to integrate_RNA.Rmd [default: same dir as script]\n",
     "  --integration_only <TRUE/FALSE> Run only integration from existing merged_QC.rds [default: FALSE]\n",
-    "  --integration_level <Batch|Sample> Required when integration runs\n",
+    "  --integration_level <Batch|Sample> Integration grouping level [default: Sample]\n",
     "  --use_cellbender <TRUE/FALSE> Use cellbender_filtered.h5 as filtered input [default: FALSE]\n",
     "  --help                  Show this help message\n",
     sep = ""
@@ -73,7 +81,7 @@ parse_cli_args <- function(args) {
     template = NULL,
     merge_template = NULL,
     integration_template = NULL,
-    integration_level = NULL,
+    integration_level = "Sample",
     ncores = 1L,
     sample_name = NULL,
     merge_only = "FALSE",
@@ -143,7 +151,7 @@ parse_cli_args <- function(args) {
   defaults$integration_level <- normalize_integration_level(defaults$integration_level)
 
   if (isTRUE(defaults$run_integration) && is.na(defaults$integration_level)) {
-    stop("--integration_level is required when integration runs; use Batch or Sample.", call. = FALSE)
+    stop("--integration_level must be Batch or Sample.", call. = FALSE)
   }
 
   defaults
@@ -169,6 +177,7 @@ script_dir <- tryCatch(
   dirname(normalizePath(sub("^--file=", "", script_arg), mustWork = FALSE)),
   error = function(e) getwd()
 )
+source(file.path(script_dir, "support_files", "qc_helpers.R"))
 
 # Normalize output path early so metadata and outputs are colocated.
 opt$output_dir <- normalizePath(opt$output_dir, winslash = "/", mustWork = FALSE)
@@ -316,7 +325,7 @@ if (isTRUE(opt$integration_only) && !is.null(opt$sample_name)) {
 }
 
 # ── Read and validate sample sheet ────────────────────────────────────────────
-samples <- read.csv(opt$sample_sheet, stringsAsFactors = FALSE, strip.white = TRUE)
+samples <- load_transposed_sample_sheet(opt$sample_sheet)
 
 required_cols <- c("sample_name", "filtered_path", "raw_path")
 missing_cols  <- setdiff(required_cols, colnames(samples))
@@ -379,8 +388,16 @@ merge_sample_rds <- function(samples_df, output_dir) {
   obj_list <- lapply(seq_along(rds_paths), function(i) {
     message("  Loading: ", basename(rds_paths[[i]]))
     obj <- readRDS(rds_paths[[i]])
-    obj$sample_name <- samples_df$sample_name[[i]]
+    obj$library_id <- samples_df$sample_name[[i]]
     obj$batch <- samples_df$batch[[i]]
+    # Hashtagged libraries already carry per-cell sample identity (HTO_sample /
+    # replicate_id) assigned by HTODemux in sample_QC.Rmd; preserve it instead
+    # of overwriting with the pooled library name.
+    if (isTRUE(samples_df$use_hashtag[[i]]) && "HTO_sample" %in% colnames(obj@meta.data)) {
+      obj$sample_name <- obj$HTO_sample
+    } else {
+      obj$sample_name <- samples_df$sample_name[[i]]
+    }
     obj
   })
 
@@ -514,19 +531,47 @@ if (!is.null(opt$sample_name)) {
   if (isTRUE(opt$run_integration)) {
     stop("--run_integration TRUE cannot be combined with --sample_name because merge is not run.", call. = FALSE)
   }
-  samples <- samples[samples$sample_name == opt$sample_name, ]
-  if (nrow(samples) == 0) {
-    stop("--sample_name '", opt$sample_name, "' not found in sample sheet.", call. = FALSE)
-  }
+  samples <- select_sample_rows(samples, opt$sample_name)
 }
 
 # ── Optional threshold columns (NA means "use MAD default") ───────────────────
 threshold_cols <- c("min_nCount_RNA", "max_nCount_RNA",
                     "min_nFeature_RNA", "max_nFeature_RNA",
-                    "max_percent_mt", "min_malat1")
+                    "max_percent_mt", "min_malat1",
+                    "min_nCount_ADT", "max_nCount_ADT")
 
 # Add any missing threshold columns as NA so downstream code is always uniform
 for (col in threshold_cols) {
+  if (!col %in% colnames(samples)) samples[[col]] <- NA_real_
+}
+
+# ── Optional hashtag (HTO) / CITE-seq (ADT) columns ───────────────────────────
+if (!"use_hashtag" %in% colnames(samples)) {
+  samples$use_hashtag <- FALSE
+} else {
+  samples$use_hashtag <- suppressWarnings(as.logical(samples$use_hashtag))
+  samples$use_hashtag[is.na(samples$use_hashtag)] <- FALSE
+}
+if (!"use_adt" %in% colnames(samples)) {
+  samples$use_adt <- FALSE
+} else {
+  samples$use_adt <- suppressWarnings(as.logical(samples$use_adt))
+  samples$use_adt[is.na(samples$use_adt)] <- FALSE
+}
+
+hto_adt_char_cols <- c("feature_reference_path", "hto_path", "adt_path",
+                       "raw_adt_path", "hto_features")
+for (col in hto_adt_char_cols) {
+  if (!col %in% colnames(samples)) {
+    samples[[col]] <- ""
+  } else {
+    samples[[col]] <- trimws(as.character(samples[[col]]))
+    samples[[col]][is.na(samples[[col]])] <- ""
+  }
+}
+hto_adt_numeric_cols <- c("dsb_background_rna_max", "dsb_background_prot_min",
+                          "dsb_background_prot_max")
+for (col in hto_adt_numeric_cols) {
   if (!col %in% colnames(samples)) samples[[col]] <- NA_real_
 }
 
@@ -573,7 +618,19 @@ render_sample <- function(row) {
         min_nFeature_RNA = suppressWarnings(as.numeric(row[["min_nFeature_RNA"]])),
         max_nFeature_RNA = suppressWarnings(as.numeric(row[["max_nFeature_RNA"]])),
         max_percent_mt   = suppressWarnings(as.numeric(row[["max_percent_mt"]])),
-        min_malat1       = suppressWarnings(as.numeric(row[["min_malat1"]]))
+        min_malat1       = suppressWarnings(as.numeric(row[["min_malat1"]])),
+        min_nCount_ADT   = suppressWarnings(as.numeric(row[["min_nCount_ADT"]])),
+        max_nCount_ADT   = suppressWarnings(as.numeric(row[["max_nCount_ADT"]])),
+        use_hashtag      = isTRUE(row[["use_hashtag"]]),
+        use_adt          = isTRUE(row[["use_adt"]]),
+        feature_reference_path = row[["feature_reference_path"]],
+        hto_path         = row[["hto_path"]],
+        adt_path         = row[["adt_path"]],
+        raw_adt_path     = row[["raw_adt_path"]],
+        hto_features     = row[["hto_features"]],
+        dsb_background_rna_max  = suppressWarnings(as.numeric(row[["dsb_background_rna_max"]])),
+        dsb_background_prot_min = suppressWarnings(as.numeric(row[["dsb_background_prot_min"]])),
+        dsb_background_prot_max = suppressWarnings(as.numeric(row[["dsb_background_prot_max"]]))
       ),
       envir         = new.env(parent = globalenv()),
       quiet         = TRUE

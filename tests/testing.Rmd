@@ -1,0 +1,107 @@
+---
+title: "scRNA-seq QC Pipeline Testing"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+root_candidates <- normalizePath(c(".", "..", "../.."), mustWork = FALSE)
+repo_root <- root_candidates[file.exists(file.path(root_candidates, "support_files", "qc_helpers.R"))][[1L]]
+knitr::opts_knit$set(root.dir = repo_root)
+```
+
+This report runs the fast, local `testthat` checks. It does not submit SLURM
+jobs or require real CellRanger matrices. Matrix-reading tests create small
+filtered/raw 10x MEX fixtures in temporary directories.
+
+## Environment
+
+Run from the repository's R environment. In a shell, initialize it before
+rendering:
+
+```bash
+unset R_HOME R_LIBS R_LIBS_USER R_PROFILE R_PROFILE_USER R_ENVIRON R_ENVIRON_USER
+set +u
+source /gpfs/data/cvrcbioinfolab/gildem01/conda_envs/anaconda3/condaload_r.sh
+set -u
+Rscript --vanilla -e 'rmarkdown::render("tests/testing.Rmd")'
+```
+
+The test suite needs `testthat` and `Matrix`; the synthetic 10x reader test
+also uses `Seurat`. The report uses `knitr` and `rmarkdown`.
+
+```{r package-status}
+required_packages <- c("testthat", "Matrix", "Seurat", "knitr", "rmarkdown")
+package_status <- data.frame(
+  package = required_packages,
+  installed = vapply(required_packages, requireNamespace, logical(1), quietly = TRUE),
+  stringsAsFactors = FALSE
+)
+knitr::kable(package_status, row.names = FALSE)
+
+if (!all(package_status$installed[package_status$package %in% c("testthat", "Matrix", "knitr", "rmarkdown")])) {
+  stop("Install the required testing/report packages before running this report.", call. = FALSE)
+}
+```
+
+## Local Tests
+
+The suite checks:
+
+- HTO/ADT feature splitting by the canonical `feature_reference.csv` `name`
+  values, including strict errors for missing names.
+- Transposed sample-sheet loading, header validation, missing/duplicate
+  fields, and sample selection.
+- ADT count MAD defaults, explicit min/max thresholds, filter boundaries, and
+  no-op behavior when ADT is disabled.
+- Actual `Seurat::Read10X()` parsing of generated filtered/raw MEX fixtures.
+- R/R Markdown parsing, the fixed HTO quantile, Singlet-only mask and
+  Singlet-derived HTO plot thresholds, shell syntax, and sample-name
+  extraction from the transposed CSV header.
+
+```{r run-testthat, results='asis'}
+rscript <- Sys.which("Rscript")
+if (!nzchar(rscript)) stop("Rscript is not available on PATH.", call. = FALSE)
+
+test_run <- local({
+  previous_dir <- getwd()
+  on.exit(setwd(previous_dir))
+  setwd(repo_root)
+  output <- system2(rscript, c("--vanilla", "tests/testthat.R"),
+                    stdout = TRUE, stderr = TRUE)
+  status <- attr(output, "status")
+  list(output = output, status = if (is.null(status)) 0L else status)
+})
+cat(test_run$output, sep = "\n")
+if (test_run$status != 0L) stop("The local testthat suite failed.", call. = FALSE)
+```
+
+The same suite can run without rendering this report:
+
+```bash
+Rscript --vanilla tests/testthat.R
+```
+
+## Cluster Smoke Checks
+
+The local suite does not render the full QC workflow. After replacing the
+`Pool_1` placeholder matrix, feature-reference, and raw ADT paths in
+`samples.csv`, perform these checks in the cluster R environment:
+
+1. Render one RNA-only sample and compare its QC output with the existing
+   RNA-only workflow.
+2. Render one hashtagged+CITE-seq sample. Confirm HTO Singlets are retained,
+   the `ADT_DSB` assay is created, and the ADT count filter is reported.
+3. For a mixed run, confirm merged sample/library metadata and the HTO/ADT
+   report sections.
+4. Check `chunk_logs/chunk_progress_<sample>.log` for the ADT threshold
+   parameters.
+
+Before the HTO/ADT render, confirm `dsb`, `scater`, and `gridExtra`
+are installed. These full-data checks require usable CellRanger matrices and
+are intentionally kept out of the fast local suite.

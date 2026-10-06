@@ -217,7 +217,7 @@ if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
   elif [[ "${INTEGRATION_LEVEL_LOWER}" == "sample" ]]; then
     INTEGRATION_LEVEL="Sample"
   else
-    echo "ERROR: --integration_level is required when integration runs and must be Batch or Sample." >&2
+    echo "ERROR: --integration_level must be Batch or Sample." >&2
     exit 1
   fi
 fi
@@ -309,8 +309,8 @@ if command -v conda >/dev/null 2>&1 && [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
   conda env export -n "${CONDA_DEFAULT_ENV}" > "${OUTPUT_DIR}/run_metadata/conda_env_export_submit.yml" 2>/dev/null || true
 fi
 
-# ── Read sample names from CSV (skip header, column 1) ────────────────────────
-mapfile -t SAMPLES < <(tail -n +2 "${SAMPLE_SHEET}" | cut -d',' -f1 | tr -d '\r')
+# ── Read sample names from transposed CSV header ───────────────────────────────
+mapfile -t SAMPLES < <(head -n 1 "${SAMPLE_SHEET}" | cut -d',' --complement -f1 | tr ',' '\n' | tr -d '\r')
 
 if [[ ${#SAMPLES[@]} -eq 0 ]]; then
   echo "ERROR: no samples found in ${SAMPLE_SHEET}" >&2
