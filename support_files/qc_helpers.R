@@ -58,6 +58,18 @@ validate_raw_adt_path <- function(use_adt, raw_adt_path) {
   invisible(raw_adt_path)
 }
 
+# Seurat rewrites '_' to '-' in feature names; do it up front so all matrices agree.
+dash_feature_names <- function(mat) {
+  if (is.null(mat)) return(NULL)
+  new_names <- gsub("_", "-", rownames(mat), fixed = TRUE)
+  if (anyDuplicated(new_names)) {
+    stop("Feature names collide after '_' -> '-' conversion: ",
+         paste(unique(new_names[duplicated(new_names)]), collapse = ", "), call. = FALSE)
+  }
+  rownames(mat) <- new_names
+  mat
+}
+
 split_antibody_capture <- function(ab_matrix, feature_names, hto_features) {
   if (is.null(rownames(ab_matrix))) {
     stop("Antibody Capture matrix must have feature row names.", call. = FALSE)

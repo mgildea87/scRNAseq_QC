@@ -53,3 +53,22 @@ testthat::test_that("raw ADT path is an optional override when ADT is enabled", 
   on.exit(unlink(raw_adt_path), add = TRUE)
   validate_raw_adt_path(TRUE, raw_adt_path)
 })
+testthat::test_that("dash_feature_names matches Seurat renaming so raw and filtered ADT index alike", {
+  testthat::skip_if_not_installed("Seurat")
+  raw <- Matrix::Matrix(
+    matrix(1:12, nrow = 3, dimnames = list(c("CD3_TotalSeqB", "CD19_TotalSeqB", "Isotype_Ctrl"), paste0("bc", 1:4))),
+    sparse = TRUE
+  )
+  renamed <- dash_feature_names(raw)
+  assay <- suppressWarnings(SeuratObject::CreateAssayObject(counts = renamed[, 1:2]))
+
+  testthat::expect_identical(rownames(assay), rownames(renamed))
+  testthat::expect_equal(unname(as.matrix(renamed[rownames(assay), 3:4])), unname(as.matrix(raw[, 3:4])))
+  testthat::expect_null(dash_feature_names(NULL))
+  testthat::expect_error(raw[rownames(assay), , drop = FALSE], "subscript out of bounds")
+})
+
+testthat::test_that("dash_feature_names rejects colliding names", {
+  m <- matrix(1:4, nrow = 2, dimnames = list(c("A_B", "A-B"), c("x", "y")))
+  testthat::expect_error(dash_feature_names(m), "collide")
+})

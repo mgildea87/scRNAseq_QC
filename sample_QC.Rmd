@@ -368,6 +368,10 @@ if (isTRUE(params$use_hashtag) || isTRUE(params$use_adt)) {
     adt_matrix_raw <- raw_hto_adt$adt
   }
 
+  hto_matrix_filtered <- dash_feature_names(hto_matrix_filtered)
+  adt_matrix_filtered <- dash_feature_names(adt_matrix_filtered)
+  adt_matrix_raw      <- dash_feature_names(adt_matrix_raw)
+
   cat('HTO features resolved:', if (!is.null(hto_matrix_filtered)) nrow(hto_matrix_filtered) else 0, '\n')
   cat('ADT features resolved:', if (!is.null(adt_matrix_filtered)) nrow(adt_matrix_filtered) else 0, '\n')
 }
