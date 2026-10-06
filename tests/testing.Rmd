@@ -90,8 +90,9 @@ Rscript --vanilla tests/testthat.R
 ## Cluster Smoke Checks
 
 The local suite does not render the full QC workflow. After replacing the
-`Pool_1` placeholder matrix, feature-reference, and raw ADT paths in
-`samples.csv`, perform these checks in the cluster R environment:
+`Pool_1` placeholder matrix and feature-reference paths in `samples.csv`
+(and `raw_adt_path` if using a separate raw ADT matrix), perform these checks
+in the cluster R environment:
 
 1. Render one RNA-only sample and compare its QC output with the existing
    RNA-only workflow.

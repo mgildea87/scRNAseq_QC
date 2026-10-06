@@ -344,6 +344,8 @@ raw_matrix <- read_10x_input(params$raw_path, "raw")
 hto_matrix_filtered <- NULL
 adt_matrix_filtered <- NULL
 adt_matrix_raw      <- NULL
+raw_adt_path <- params$raw_adt_path
+if (is.na(raw_adt_path) || !nzchar(trimws(raw_adt_path))) raw_adt_path <- ''
 
 if (isTRUE(params$use_hashtag) || isTRUE(params$use_adt)) {
   filtered_hto_adt <- resolve_hto_adt(
@@ -356,11 +358,11 @@ if (isTRUE(params$use_hashtag) || isTRUE(params$use_adt)) {
   adt_matrix_filtered <- filtered_hto_adt$adt
 
   if (isTRUE(params$use_adt)) {
-    # DSB background counts always come from the explicit raw ADT input.
+    # A blank override falls back to resolving ADT from the raw input matrix.
     raw_hto_adt <- resolve_hto_adt(
       input_path = params$raw_path, label = 'raw',
       want_hto = FALSE, want_adt = TRUE,
-      hto_path = '', adt_path = params$raw_adt_path,
+      hto_path = '', adt_path = raw_adt_path,
       feature_names = feature_reference_names, hto_features = params$hto_features
     )
     adt_matrix_raw <- raw_hto_adt$adt

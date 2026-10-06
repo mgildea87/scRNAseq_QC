@@ -42,9 +42,10 @@ testthat::test_that("HTO doublet check resolves converted PCA and UMAP names", {
   testthat::expect_error(resolve_hto_doublet_dimreds("UMAP"), "must preserve PCA and UMAP")
 })
 
-testthat::test_that("raw ADT path is mandatory only when ADT is enabled", {
+testthat::test_that("raw ADT path is an optional override when ADT is enabled", {
   validate_raw_adt_path(FALSE, "")
-  testthat::expect_error(validate_raw_adt_path(TRUE, ""), "raw_adt_path")
+  validate_raw_adt_path(TRUE, "")
+  validate_raw_adt_path(TRUE, NA_character_)
   testthat::expect_error(validate_raw_adt_path(TRUE, "/missing/raw_adt"), "raw_adt_path")
 
   raw_adt_path <- tempfile()

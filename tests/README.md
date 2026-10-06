@@ -31,10 +31,10 @@ rendered report that runs the same suite and documents cluster smoke checks.
 
 | Test file | Coverage |
 |-----------|----------|
-| `test-adt-qc.R` | ADT MAD-based defaults and explicit thresholds; ADT filter boundaries and disabled no-op behavior; HTO Singlet-only mask; `recoverDoublets` PCA/UMAP name handling; validation of the raw ADT path when ADT is enabled. |
+| `test-adt-qc.R` | ADT MAD-based defaults and explicit thresholds; ADT filter boundaries and disabled no-op behavior; HTO Singlet-only mask; `recoverDoublets` PCA/UMAP name handling; validation of the optional raw ADT path override. |
 | `test-hto-adt-split.R` | Splitting combined antibody features using canonical feature-reference names; clear errors for missing or invalid reference/HTO names; per-HTO thresholds derived from the minimum CLR expression among assigned Singlets. |
 | `test-sample-sheet.R` | Reconstructing and selecting samples from the transposed sheet; rejecting malformed sheet structure. |
-| `test-static-checks.R` | Parsing the runner and sample QC R Markdown; checking HTO demultiplexing and Singlet logic, raw ADT path forwarding, and the integration-level default (`Sample`) with `Batch` override; shell syntax; sample-name extraction from the CSV header; `scDblFinder::recoverDoublets` availability when installed. |
+| `test-static-checks.R` | Parsing the runner and sample QC R Markdown; checking HTO demultiplexing and Singlet logic, raw ADT override/fallback routing, and the integration-level default (`Sample`) with `Batch` override; shell syntax; sample-name extraction from the CSV header; `scDblFinder::recoverDoublets` availability when installed. |
 | `test-synthetic-10x.R` | Reading generated filtered/raw 10x MEX matrices through `Seurat::Read10X()`; checking combined antibody splitting, separate HTO and ADT matrices, native `Multiplexing Capture`, and raw-only barcodes. |
 
 `helper-fixtures.R` creates the temporary MEX matrices and sample sheets used by

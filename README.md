@@ -127,7 +127,7 @@ row must exactly match the corresponding sample column header.
 | `feature_reference_path` | Required when HTO or ADT enabled with "name" column specifying feature names | CellRanger `feature_reference.csv`; required even when separate HTO/ADT paths are provided |
 | `hto_path` | No | Direct path to a separate filtered HTO matrix (10x MEX directory or `.h5`); takes priority over matrix splitting |
 | `adt_path` | No | Direct path to a separate filtered ADT matrix; takes priority over matrix splitting |
-| `raw_adt_path` | When ADT enabled | Required direct path to the raw ADT matrix used for DSB empty-droplet background; barcodes must match `raw_path` |
+| `raw_adt_path` | No | Optional direct path override for the raw ADT matrix used for DSB empty-droplet background; if blank, ADT is resolved from the `Antibody Capture` matrix in `raw_path`; barcodes must match filtered ADT |
 | `hto_features` | For combined HTO/ADT matrix | Exact HTO names from the reference `name` column, separated by `;` or `,` |
 | `min_nCount_ADT` / `max_nCount_ADT` | No | Lower/upper ADT UMI bounds; `NA` uses MAD minimum or no upper cap; only applies when ADT is enabled |
 | `dsb_background_rna_max` | No | Override for maximum log10(RNA UMI) among empty-droplet background barcodes |
@@ -210,11 +210,13 @@ file, provide it through `hto_path`.
 Separate matrices remain supported: `hto_path` and `adt_path`, when set,
 override resolution for the filtered assay and may point to a standalone
 single-modality MEX or `.h5` file. CellRanger's native `Multiplexing Capture`
-matrix can also supply HTO counts. When ADT is enabled, `raw_adt_path` is
-required and must point to the raw ADT matrix used for DSB empty-droplet
-background; there is no fallback to `raw_path`. Filtered and raw ADT barcodes
-must match for DSB. The `feature_reference_path` is still required when HTO
-or ADT processing is enabled, including when separate paths are used.
+matrix can also supply HTO counts. When ADT is enabled, `raw_adt_path` may be
+left blank to resolve ADT from an `Antibody Capture` matrix in the raw input
+using the same feature-reference rules, or set to a direct raw ADT matrix path
+to override resolution.
+Filtered and raw ADT barcodes must match for DSB. The `feature_reference_path`
+is still required when HTO or ADT processing is enabled, including when
+separate paths are used.
 
 ### Hashtag (HTO) demultiplexing
 

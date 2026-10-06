@@ -46,9 +46,12 @@ select_10x_assay_matrix <- function(x, feature_types, label, input_path) {
 validate_raw_adt_path <- function(use_adt, raw_adt_path) {
   if (!isTRUE(use_adt)) return(invisible(NULL))
 
-  if (length(raw_adt_path) != 1L || is.na(raw_adt_path) ||
-      !nzchar(trimws(raw_adt_path)) || !file.exists(raw_adt_path)) {
-    stop("raw_adt_path must point to an existing raw ADT matrix when use_adt is TRUE.",
+  if (length(raw_adt_path) != 1L) {
+    stop("raw_adt_path must be a single path when provided.", call. = FALSE)
+  }
+  if (is.na(raw_adt_path) || !nzchar(trimws(raw_adt_path))) return(invisible(NULL))
+  if (!file.exists(raw_adt_path)) {
+    stop("raw_adt_path must point to an existing raw ADT matrix when provided.",
          call. = FALSE)
   }
 
