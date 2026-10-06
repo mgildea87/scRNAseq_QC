@@ -8,6 +8,7 @@ max_nCount_RNA,NA,NA,25000,NA
 min_nFeature_RNA,NA,NA,250,NA
 max_nFeature_RNA,NA,NA,6000,NA
 max_percent_mt,NA,NA,20,NA
+max_percent_rbc,NA,NA,NA,NA
 min_malat1,1,1,1,1
 use_hashtag,FALSE,FALSE,FALSE,TRUE
 use_adt,FALSE,FALSE,FALSE,TRUE

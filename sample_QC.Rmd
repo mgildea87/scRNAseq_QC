@@ -25,6 +25,7 @@ params:
   min_nFeature_RNA: NA
   max_nFeature_RNA: NA
   max_percent_mt:   NA
+  max_percent_rbc:  NA
   min_malat1:       0
   min_nCount_ADT:   NA
   max_nCount_ADT:   NA
@@ -99,6 +100,7 @@ param_lines <- c(
   sprintf('[%s] PARAM min_nFeature_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nFeature_RNA)),
   sprintf('[%s] PARAM max_nFeature_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nFeature_RNA)),
   sprintf('[%s] PARAM max_percent_mt=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_percent_mt)),
+  sprintf('[%s] PARAM max_percent_rbc=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_percent_rbc)),
   sprintf('[%s] PARAM min_malat1=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_malat1)),
   sprintf('[%s] PARAM min_nCount_ADT=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nCount_ADT)),
   sprintf('[%s] PARAM max_nCount_ADT=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nCount_ADT)),
@@ -1377,6 +1379,7 @@ thresh_max_nFeature <- resolve_thresh(params$max_nFeature_RNA, Inf)
 thresh_max_mt       <- resolve_thresh(params$max_percent_mt,
                          percent.mt_mad_thresh$filter_threshold[percent.mt_mad_thresh$mad == 5])
 thresh_min_malat1   <- resolve_thresh(params$min_malat1, 1)
+thresh_max_rbc      <- resolve_thresh(params$max_percent_rbc, Inf)
 
 # Guard against NA mitochondrial thresholds (seen in some CellBender outputs)
 # so QC filtering does not drop all cells due to logical NA comparisons.
@@ -1389,6 +1392,7 @@ cat('Filter thresholds applied:\n')
 cat('  nCount_RNA   :', thresh_min_nCount,   '–', thresh_max_nCount,   '\n')
 cat('  nFeature_RNA :', thresh_min_nFeature, '–', thresh_max_nFeature, '\n')
 cat('  percent.mt   : <=', thresh_max_mt,  '\n')
+cat('  percent.rbc  : <=', thresh_max_rbc, '\n')
 cat('  MALAT1 (norm): >', thresh_min_malat1, '\n')
 
 has_adt_qc <- isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat)
@@ -1415,6 +1419,7 @@ pass_nCount_max <- seurat$nCount_RNA <= thresh_max_nCount
 pass_nFeat_min  <- seurat$nFeature_RNA >  thresh_min_nFeature
 pass_nFeat_max  <- seurat$nFeature_RNA <= thresh_max_nFeature
 pass_mt_max     <- is.na(seurat$percent.mt) | seurat$percent.mt <= thresh_max_mt
+pass_rbc_max    <- is.na(seurat$percent.rbc) | seurat$percent.rbc <= thresh_max_rbc
 
 cat('Cells passing each criterion before combined filter:\n')
 cat('  nCount_RNA   > min :', sum(pass_nCount_min), '/', length(pass_nCount_min), '\n')
@@ -1422,13 +1427,14 @@ cat('  nCount_RNA   <= max:', sum(pass_nCount_max), '/', length(pass_nCount_max)
 cat('  nFeature_RNA > min :', sum(pass_nFeat_min),  '/', length(pass_nFeat_min),  '\n')
 cat('  nFeature_RNA <= max:', sum(pass_nFeat_max),  '/', length(pass_nFeat_max),  '\n')
 cat('  percent.mt   <= max:', sum(pass_mt_max),     '/', length(pass_mt_max),     '\n')
+cat('  percent.rbc  <= max:', sum(pass_rbc_max),    '/', length(pass_rbc_max),    '\n')
 cat('  nCount_ADT   in range:', sum(pass_nCount_ADT), '/', length(pass_nCount_ADT), '\n')
 
 # ── Apply filter ───────────────────────────────────────────────────────────────
 keep_cells <- colnames(seurat)[
   seurat$nCount_RNA > 0 & seurat$nFeature_RNA > 0 &
     pass_nCount_min & pass_nCount_max & pass_nFeat_min & pass_nFeat_max &
-    pass_mt_max & pass_nCount_ADT
+    pass_mt_max & pass_rbc_max & pass_nCount_ADT
 ]
 seurat <- subset(seurat, cells = keep_cells)
 if (!is.na(malat1_feature)) {
@@ -2064,12 +2070,23 @@ if (is.null(adt_matrix_raw)) {
   )
   md$drop.class <- ifelse(rownames(md) %in% colnames(seurat), 'cell', 'background')
 
-  ggplot(md, aes(x = prot.size, y = rna.size, color = mt.prop)) +
+  dsb_bg <- resolve_dsb_background_thresholds(
+    md$rna.size, md$prot.size, md$drop.class == 'background',
+    rna_max = params$dsb_background_rna_max,
+    prot_min = params$dsb_background_prot_min,
+    prot_max = params$dsb_background_prot_max
+  )
+
+  bg_diag_plot <- ggplot(md, aes(x = prot.size, y = rna.size, color = mt.prop)) +
     geom_point(size = 0.5) +
     scale_color_viridis_c() +
+    geom_hline(yintercept = dsb_bg$rna_max, color = 'red', linetype = 'dashed') +
+    geom_vline(xintercept = c(dsb_bg$prot_min, dsb_bg$prot_max), color = 'red', linetype = 'dashed') +
     theme_classic() +
-    facet_wrap(~drop.class) +
     ggtitle('DSB background diagnostic: RNA vs ADT size by droplet class')
+
+  print(bg_diag_plot)
+  print(bg_diag_plot + facet_wrap(~drop.class))
 }
 ```
 
@@ -2084,9 +2101,15 @@ if (!requireNamespace('dsb', quietly = TRUE)) {
   prot.size <- log10(pmax(Matrix::colSums(adt_matrix_raw[, common_raw_barcodes, drop = FALSE]), 1))
   is_background <- !(common_raw_barcodes %in% colnames(seurat))
 
-  bg_rna_max  <- if (!is.na(params$dsb_background_rna_max))  params$dsb_background_rna_max  else stats::median(rna.size[is_background])
-  bg_prot_min <- if (!is.na(params$dsb_background_prot_min)) params$dsb_background_prot_min else stats::quantile(prot.size[is_background], 0.01, names = FALSE)
-  bg_prot_max <- if (!is.na(params$dsb_background_prot_max)) params$dsb_background_prot_max else stats::quantile(prot.size[is_background], 0.99, names = FALSE)
+  dsb_bg <- resolve_dsb_background_thresholds(
+    rna.size, prot.size, is_background,
+    rna_max = params$dsb_background_rna_max,
+    prot_min = params$dsb_background_prot_min,
+    prot_max = params$dsb_background_prot_max
+  )
+  bg_rna_max  <- dsb_bg$rna_max
+  bg_prot_min <- dsb_bg$prot_min
+  bg_prot_max <- dsb_bg$prot_max
 
   background_barcodes <- common_raw_barcodes[
     is_background & rna.size <= bg_rna_max & prot.size >= bg_prot_min & prot.size <= bg_prot_max

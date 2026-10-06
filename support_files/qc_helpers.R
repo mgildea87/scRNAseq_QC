@@ -59,6 +59,16 @@ validate_raw_adt_path <- function(use_adt, raw_adt_path) {
 }
 
 # Seurat rewrites '_' to '-' in feature names; do it up front so all matrices agree.
+# Background-droplet bounds on log10 scale; NA overrides fall back to data-driven defaults.
+resolve_dsb_background_thresholds <- function(rna_size, prot_size, is_background,
+                                              rna_max = NA, prot_min = NA, prot_max = NA) {
+  list(
+    rna_max  = if (!is.na(rna_max))  rna_max  else stats::median(rna_size[is_background]),
+    prot_min = if (!is.na(prot_min)) prot_min else stats::quantile(prot_size[is_background], 0.01, names = FALSE),
+    prot_max = if (!is.na(prot_max)) prot_max else stats::quantile(prot_size[is_background], 0.99, names = FALSE)
+  )
+}
+
 dash_feature_names <- function(mat) {
   if (is.null(mat)) return(NULL)
   new_names <- gsub("_", "-", rownames(mat), fixed = TRUE)

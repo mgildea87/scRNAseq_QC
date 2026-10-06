@@ -537,7 +537,7 @@ if (!is.null(opt$sample_name)) {
 # ── Optional threshold columns (NA means "use MAD default") ───────────────────
 threshold_cols <- c("min_nCount_RNA", "max_nCount_RNA",
                     "min_nFeature_RNA", "max_nFeature_RNA",
-                    "max_percent_mt", "min_malat1",
+                    "max_percent_mt", "max_percent_rbc", "min_malat1",
                     "min_nCount_ADT", "max_nCount_ADT")
 
 # Add any missing threshold columns as NA so downstream code is always uniform
@@ -618,6 +618,7 @@ render_sample <- function(row) {
         min_nFeature_RNA = suppressWarnings(as.numeric(row[["min_nFeature_RNA"]])),
         max_nFeature_RNA = suppressWarnings(as.numeric(row[["max_nFeature_RNA"]])),
         max_percent_mt   = suppressWarnings(as.numeric(row[["max_percent_mt"]])),
+        max_percent_rbc  = suppressWarnings(as.numeric(row[["max_percent_rbc"]])),
         min_malat1       = suppressWarnings(as.numeric(row[["min_malat1"]])),
         min_nCount_ADT   = suppressWarnings(as.numeric(row[["min_nCount_ADT"]])),
         max_nCount_ADT   = suppressWarnings(as.numeric(row[["max_nCount_ADT"]])),

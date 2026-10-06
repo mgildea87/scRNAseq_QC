@@ -121,6 +121,7 @@ row must exactly match the corresponding sample column header.
 | `min_nCount_RNA` / `max_nCount_RNA` | No | Lower/upper RNA UMI bounds; `NA` uses MAD minimum or no upper cap |
 | `min_nFeature_RNA` / `max_nFeature_RNA` | No | Lower/upper detected-gene bounds; `NA` uses MAD minimum or no upper cap |
 | `max_percent_mt` | No | Upper mitochondrial fraction bound; `NA` uses median + 5 × MAD |
+| `max_percent_rbc` | No | Upper haemoglobin-gene percentage bound; `NA` applies no cap |
 | `min_malat1` | No | Minimum normalised MALAT1 expression (default 1) |
 | `use_hashtag` | No | `TRUE` enables HTO loading and demultiplexing for this sample (default `FALSE`) |
 | `use_adt` | No | `TRUE` enables ADT loading and DSB normalization for this sample (default `FALSE`) |
@@ -138,6 +139,7 @@ Set a threshold to `NA` (or omit its field row) to use the automatic default:
 - `min_nCount_RNA`, `min_nFeature_RNA`, and `min_nCount_ADT`: median − 4 × MAD
 - `max_nCount_RNA`, `max_nFeature_RNA`, and `max_nCount_ADT`: no upper cap
 - `max_percent_mt`: median + 5 × MAD
+- `max_percent_rbc`: no upper cap
 - `min_malat1`: 1
 
 ### Example
@@ -153,6 +155,7 @@ max_nCount_RNA,NA,25000
 min_nFeature_RNA,NA,250
 max_nFeature_RNA,NA,6000
 max_percent_mt,NA,20
+max_percent_rbc,NA,NA
 min_malat1,1,1
 use_hashtag,FALSE,FALSE
 use_adt,FALSE,FALSE
