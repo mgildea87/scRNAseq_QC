@@ -2142,8 +2142,10 @@ DefaultAssay(seurat) <- 'RNA'
 # Average DSB-normalized ADT expression per SCT cluster (no marker test needed);
 # reuses the myColor/myBreaks palette defined in the marker-heatmap chunk above.
 adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'seurat_clusters_sct')
-adt_mat <- adt_avg[['ADT_DSB']]
-if (nrow(adt_mat) > 0 && ncol(adt_mat) > 0) {
+adt_mat <- as.matrix(adt_avg[['ADT_DSB']])
+# Row scaling yields NaN for constant or non-finite rows, which breaks pheatmap clustering.
+adt_mat <- adt_mat[apply(adt_mat, 1, function(x) all(is.finite(x)) && stats::sd(x) > 0), , drop = FALSE]
+if (nrow(adt_mat) > 1 && ncol(adt_mat) > 1) {
   pheatmap::pheatmap(
     adt_mat,
     scale = 'row',
