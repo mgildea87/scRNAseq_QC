@@ -962,7 +962,7 @@ Proportion of reads mapping to mitochondrial genes. Elevated values indicate str
 print(describe(seurat$percent.mt))
 ```
 
-```{r summary-adt-count, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)}
+```{r summary-adt-count, eval=isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat)}
 print(describe(seurat$nCount_ADT))
 ```
 
@@ -993,7 +993,7 @@ nFeature_mad_thresh <- build_mad_table(seurat$nFeature_RNA, nFeature_RNA_med, nF
 percent.mt_mad_thresh <- build_mad_table(seurat$percent.mt, percent.mt_med,   percent.mt_mad)
 ```
 
-```{r compute-mad-adt, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)}
+```{r compute-mad-adt, eval=isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat)}
 nCount_ADT_med <- median(seurat$nCount_ADT, na.rm = TRUE)
 nCount_ADT_mad <- median(abs(seurat$nCount_ADT - nCount_ADT_med), na.rm = TRUE)
 nCount_ADT_mad_thresh <- build_mad_table(seurat$nCount_ADT, nCount_ADT_med, nCount_ADT_mad)
@@ -1008,7 +1008,7 @@ kable(nCount_mad_thresh, digits = 3,
       align = c('l', 'c', 'c', 'c', 'c', 'c'))
 ```
 
-```{r mad-table-adt, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)}
+```{r mad-table-adt, eval=isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat)}
 kable(nCount_ADT_mad_thresh, digits = 3,
   caption = 'MAD-based filtering thresholds – ADT UMI count',
   align = c('l', 'c', 'c', 'c', 'c', 'c'))
@@ -1053,7 +1053,7 @@ make_violin_refs <- function(med, mad, log_transform = TRUE) {
 umi_refs  <- make_violin_refs(nCount_RNA_med,   nCount_RNA_mad,   log_transform = TRUE)
 gene_refs <- make_violin_refs(nFeature_RNA_med, nFeature_RNA_mad, log_transform = TRUE)
 mt_refs   <- make_violin_refs(percent.mt_med,   percent.mt_mad,   log_transform = FALSE)
-if (isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)) {
+if (isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat)) {
   adt_refs <- make_violin_refs(nCount_ADT_med, nCount_ADT_mad, log_transform = TRUE)
 }
 ```
@@ -1160,7 +1160,7 @@ gene_mito <- ggplot(seurat@meta.data,
 count_gene + count_mito + gene_mito
 ```
 
-```{r qc-adt-violin-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat), fig.height=5, fig.width=6}
+```{r qc-adt-violin-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat), fig.height=5, fig.width=6}
 ggplot(seurat@meta.data,
        aes(y = log10(pmax(nCount_ADT, 1)), x = orig.ident, fill = orig.ident)) +
   geom_violin() + theme_classic() +
@@ -1172,7 +1172,7 @@ ggplot(seurat@meta.data,
   labs(y = 'log10(ADT UMI count)')
 ```
 
-```{r qc-adt-histogram-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat), fig.height=4, fig.width=8}
+```{r qc-adt-histogram-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat), fig.height=4, fig.width=8}
 ggplot(seurat@meta.data, aes(x = log10(pmax(nCount_ADT, 1)))) +
   geom_histogram() + theme_classic() +
   geom_vline(xintercept = log10(pmax(nCount_ADT_med, 1)), color = 'red') +
@@ -1182,7 +1182,7 @@ ggplot(seurat@meta.data, aes(x = log10(pmax(nCount_ADT, 1)))) +
   labs(x = 'log10(ADT UMI count)')
 ```
 
-```{r qc-adt-scatter-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat), fig.height=5, fig.width=7}
+```{r qc-adt-scatter-prefilter, eval=isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat), fig.height=5, fig.width=7}
 ggplot(seurat@meta.data,
        aes(x = log10(pmax(nCount_RNA, 1)), y = log10(pmax(nCount_ADT, 1)))) +
   geom_point(size = 0.5, alpha = 0.5) +
@@ -1387,7 +1387,7 @@ cat('  nFeature_RNA :', thresh_min_nFeature, '–', thresh_max_nFeature, '\n')
 cat('  percent.mt   : <=', thresh_max_mt,  '\n')
 cat('  MALAT1 (norm): >', thresh_min_malat1, '\n')
 
-has_adt_qc <- isTRUE(params$use_adt) && 'ADT' %in% Assays(seurat)
+has_adt_qc <- isTRUE(params$use_adt) && 'ADT' %in% SeuratObject::Assays(seurat)
 if (has_adt_qc) {
   adt_count_thresholds <- resolve_adt_count_thresholds(
     seurat$nCount_ADT,
@@ -2113,7 +2113,7 @@ if (!requireNamespace('dsb', quietly = TRUE)) {
 }
 ```
 
-```{r adt-qc-plots, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% Assays(seurat)), fig.height=6, fig.width=10}
+```{r adt-qc-plots, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% SeuratObject::Assays(seurat)), fig.height=6, fig.width=10}
 adt_features <- rownames(seurat[['ADT_DSB']])
 raw_adt_totals <- Matrix::colSums(GetAssayData(seurat, assay = 'ADT', layer = 'counts'))
 
@@ -2134,7 +2134,7 @@ print(FeaturePlot(seurat, features = adt_features[seq_len(min(4, length(adt_feat
 DefaultAssay(seurat) <- 'RNA'
 ```
 
-```{r adt-cluster-heatmap, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% Assays(seurat)), fig.height=10, fig.width=8}
+```{r adt-cluster-heatmap, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% SeuratObject::Assays(seurat)), fig.height=10, fig.width=8}
 # Average DSB-normalized ADT expression per SCT cluster (no marker test needed);
 # reuses the myColor/myBreaks palette defined in the marker-heatmap chunk above.
 adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'seurat_clusters_sct')

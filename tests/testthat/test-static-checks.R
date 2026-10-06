@@ -25,6 +25,8 @@ testthat::test_that("R scripts and R Markdown parse", {
   testthat::expect_match(template_text, "raw_adt_path <- ''", fixed = TRUE)
   testthat::expect_match(template_text, "input_path = params$raw_path, label = 'raw'", fixed = TRUE)
   testthat::expect_match(template_text, "adt_path = raw_adt_path", fixed = TRUE)
+  testthat::expect_no_match(template_text, "%in% Assays(seurat)", fixed = TRUE)
+  testthat::expect_match(template_text, "SeuratObject::Assays(seurat)", fixed = TRUE)
   testthat::expect_match(template_text, "geom_vline(xintercept = hto_threshold, color = 'red'", fixed = TRUE)
   testthat::expect_no_match(template_text, "parse_hto_demux_thresholds", fixed = TRUE)
   testthat::expect_no_match(template_text, "params$hto_positive_quantile", fixed = TRUE)
