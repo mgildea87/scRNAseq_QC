@@ -139,10 +139,10 @@ if (length(missing_meta) > 0L) {
 # Build merged reductions/clusters if they are not already present.
 need_reduction <- !'PCA_RNA_merged' %in% names(seurat@reductions) ||
   !'UMAP_RNA_merged' %in% names(seurat@reductions)
-need_clusters <- !'seurat_clusters_merged' %in% colnames(seurat@meta.data)
+need_clusters <- !'RNA_merged_clusters' %in% colnames(seurat@meta.data)
 need_sct_reduction <- !'PCA_SCT_merged' %in% names(seurat@reductions) ||
   !'UMAP_SCT_merged' %in% names(seurat@reductions)
-need_sct_clusters <- !'seurat_clusters_sct_merged' %in% colnames(seurat@meta.data)
+need_sct_clusters <- !'SCT_merged_clusters' %in% colnames(seurat@meta.data)
 
 options(future.globals.maxSize = 8000 * 1024^6) 
 if (need_reduction || need_clusters) {
@@ -154,7 +154,7 @@ if (need_reduction || need_clusters) {
   seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_merged')
   seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_RNA_merged', assay = 'RNA', reduction.name = 'UMAP_RNA_merged')
   seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_merged', dims = c(1:30))
-  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'seurat_clusters_merged')
+  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'RNA_merged_clusters')
 }
 
 if (need_sct_reduction || need_sct_clusters) {
@@ -164,7 +164,7 @@ if (need_sct_reduction || need_sct_clusters) {
   seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_merged', features = row.names(seurat@assays$SCT))
   seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_SCT_merged', assay = 'SCT', reduction.name = 'UMAP_SCT_merged')
   seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_merged', dims = c(1:30))
-  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'seurat_clusters_sct_merged')
+  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'SCT_merged_clusters')
 }
 
 saveRDS(seurat, file = 'merged_QC.rds')
@@ -288,8 +288,8 @@ for (id_col in c('batch', 'sample_name')) {
     print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', raster = F, split.by = id_col, ncol = 3) + ggtitle(paste('SCT UMAP split by', id_col)))
   }
 }
-print(DimPlot(seurat, reduction = 'UMAP_RNA_merged', group.by = 'seurat_clusters_merged', label = TRUE, raster = F) + ggtitle('log-norm UMAP colored by log-norm clustering'))
-print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', group.by = 'seurat_clusters_sct_merged', label = TRUE, raster = F) + ggtitle('SCT UMAP colored by SCT clustering'))
+print(DimPlot(seurat, reduction = 'UMAP_RNA_merged', group.by = 'RNA_merged_clusters', label = TRUE, raster = F) + ggtitle('log-norm UMAP colored by log-norm clustering'))
+print(DimPlot(seurat, reduction = 'UMAP_SCT_merged', group.by = 'SCT_merged_clusters', label = TRUE, raster = F) + ggtitle('SCT UMAP colored by SCT clustering'))
 ```
 
 # Abundance
@@ -323,11 +323,11 @@ plot_abundance <- function(cluster_col, method_label) {
   )
 }
 
-rna_abundance_plots <- plot_abundance('seurat_clusters_merged', 'log-norm')
+rna_abundance_plots <- plot_abundance('RNA_merged_clusters', 'log-norm')
 print(rna_abundance_plots$sample_plot)
 print(rna_abundance_plots$batch_plot)
 
-sct_abundance_plots <- plot_abundance('seurat_clusters_sct_merged', 'SCT')
+sct_abundance_plots <- plot_abundance('SCT_merged_clusters', 'SCT')
 print(sct_abundance_plots$sample_plot)
 print(sct_abundance_plots$batch_plot)
 ```
@@ -386,7 +386,7 @@ Compare key QC metrics across log-normalization and SCT-based cluster identities
 qc_features <- c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score')
 
 VlnPlot(seurat, features = qc_features,
-        group.by = 'seurat_clusters_merged', pt.size = 0) + NoLegend()
+        group.by = 'RNA_merged_clusters', pt.size = 0) + NoLegend()
 ```
 
 ```{r qc-lognorm-featureplots, fig.height=5, fig.width=7, warning=F, message=F}
@@ -411,7 +411,7 @@ for (feature_name in qc_features) {
 qc_features <- c('nCount_RNA', 'nFeature_RNA', 'percent.mt', 'S.Score', 'G2M.Score')
 
 VlnPlot(seurat, features = qc_features,
-        group.by = 'seurat_clusters_sct_merged', pt.size = 0) + NoLegend()
+        group.by = 'SCT_merged_clusters', pt.size = 0) + NoLegend()
 ```
 
 ```{r qc-sct-featureplots, fig.height=5, fig.width=7, warning=F, message=F}
@@ -435,8 +435,8 @@ for (feature_name in qc_features) {
 # Differential expression (cluster markers)
 Run pseudobulk-style cluster marker discovery for log-norm and SCT cluster labels.
 ```{r differential-expression-markers, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNormalize')
-FindMarkersBulk(seurat, clus_ident = 'seurat_clusters_sct_merged', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
+FindMarkersBulk(seurat, clus_ident = 'RNA_merged_clusters', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNormalize')
+FindMarkersBulk(seurat, clus_ident = 'SCT_merged_clusters', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
 ```
 
 ## Top marker heatmap log-norm
@@ -467,8 +467,8 @@ plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
   invisible(mat)
 }
 
-mat_rna <- plot_marker_heatmap('FindMarkersBulk_merged_LogNormalize/Top_markers.csv', 'seurat_clusters_merged', 'RNA', 'Top marker heatmap - log-norm')
-mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'seurat_clusters_sct_merged', 'SCT', 'Top marker heatmap - SCT')
+mat_rna <- plot_marker_heatmap('FindMarkersBulk_merged_LogNormalize/Top_markers.csv', 'RNA_merged_clusters', 'RNA', 'Top marker heatmap - log-norm')
+mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'SCT_merged_clusters', 'SCT', 'Top marker heatmap - SCT')
 ```
 
 Annotate marker heatmaps by labeling transcription factor genes when reference files are available.
@@ -687,14 +687,14 @@ if (nrow(doublet_runs) == 0) {
 } else {
   for (i in seq_len(nrow(doublet_runs))) {
     plot_doublet_frequency(
-      cluster_col = 'seurat_clusters_merged',
+      cluster_col = 'RNA_merged_clusters',
       reduction_label = 'log-norm',
       class_col = doublet_runs$class_col[i],
       run_label = doublet_runs$run_label[i]
     )
 
     plot_doublet_frequency(
-      cluster_col = 'seurat_clusters_sct_merged',
+      cluster_col = 'SCT_merged_clusters',
       reduction_label = 'SCT',
       class_col = doublet_runs$class_col[i],
       run_label = doublet_runs$run_label[i]
@@ -735,10 +735,10 @@ if ('HTO_class' %in% colnames(seurat@meta.data)) {
 
 ```{r adt-summary-merged, eval='ADT_DSB' %in% Assays(seurat), fig.height=10, fig.width=8, warning=F, message=F}
 adt_features <- rownames(seurat[['ADT_DSB']])
-cluster_col <- if ('seurat_clusters_sct_merged' %in% colnames(seurat@meta.data)) {
-  'seurat_clusters_sct_merged'
-} else if ('seurat_clusters_merged' %in% colnames(seurat@meta.data)) {
-  'seurat_clusters_merged'
+cluster_col <- if ('SCT_merged_clusters' %in% colnames(seurat@meta.data)) {
+  'SCT_merged_clusters'
+} else if ('RNA_merged_clusters' %in% colnames(seurat@meta.data)) {
+  'RNA_merged_clusters'
 } else {
   NA_character_
 }

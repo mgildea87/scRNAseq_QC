@@ -1563,11 +1563,11 @@ Runs the standard Seurat RNA workflow on the filtered object: highly variable fe
 # NormalizeData was already called in the MALAT1 section above; not repeated here.
 seurat <- FindVariableFeatures(seurat, assay = 'RNA')
 seurat <- ScaleData(seurat, assay = 'RNA')
-seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'pca_rna')
-ElbowPlot(seurat, reduction = 'pca_rna')
-seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'pca_rna', dims = 1:30)
-seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'seurat_clusters_rna')
-seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'pca_rna', reduction.name = 'umap_rna')
+seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_sample')
+ElbowPlot(seurat, reduction = 'PCA_RNA_sample')
+seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_sample', dims = 1:30)
+seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'RNA_sample_clusters')
+seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_RNA_sample', reduction.name = 'UMAP_RNA_sample')
 ```
 
 # Most variable genes (log1p)
@@ -1665,24 +1665,24 @@ sctransform::plot_model_pars(vst_out, show_theta = TRUE) + theme_bw()
 # on the SCT assay. 
 seurat <- SCTransform(seurat, assay = 'RNA', new.assay.name = 'SCT', verbose = FALSE, vst.flavor = "v2")
 
-seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'pca_sct')
-seurat <- FindNeighbors(seurat, reduction = 'pca_sct', dims = 1:30)
-seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'seurat_clusters_sct')
-seurat <- RunUMAP(seurat, reduction = 'pca_sct', dims = 1:30, reduction.name = 'umap_sct')
+seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_sample')
+seurat <- FindNeighbors(seurat, reduction = 'PCA_SCT_sample', dims = 1:30)
+seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'SCT_sample_clusters')
+seurat <- RunUMAP(seurat, reduction = 'PCA_SCT_sample', dims = 1:30, reduction.name = 'UMAP_SCT_sample')
 
 # Keep a default cluster column for compatibility with downstream tooling.
-seurat$seurat_clusters <- seurat$seurat_clusters_sct
-Idents(seurat) <- 'seurat_clusters_sct'
+seurat$seurat_clusters <- seurat$SCT_sample_clusters
+Idents(seurat) <- 'SCT_sample_clusters'
 ```
 
 # UMAP plots by normalisation method
 Two-dimensional UMAP embeddings for RNA (log-normalised) and SCTransform workflows.
 
 ```{r umap-plot}
-DimPlot(seurat, reduction = 'umap_rna', group.by = 'seurat_clusters_rna', label = TRUE, repel = TRUE) +
+DimPlot(seurat, reduction = 'UMAP_RNA_sample', group.by = 'RNA_sample_clusters', label = TRUE, repel = TRUE) +
   ggtitle('UMAP (LogNormalize method)')
 
-DimPlot(seurat, reduction = 'umap_sct', group.by = 'seurat_clusters_sct', label = TRUE, repel = TRUE) +
+DimPlot(seurat, reduction = 'UMAP_SCT_sample', group.by = 'SCT_sample_clusters', label = TRUE, repel = TRUE) +
   ggtitle('UMAP (SCTransform normalisation)')
 ```
 
@@ -1813,14 +1813,14 @@ plot_method_modularity <- function(obj, graph_name, cluster_col, method_label) {
 plot_method_modularity(
   seurat,
   graph_name = 'RNA_snn',
-  cluster_col = 'seurat_clusters_rna',
+  cluster_col = 'RNA_sample_clusters',
   method_label = 'LogNormalize method'
 )
 
 plot_method_modularity(
   seurat,
   graph_name = 'SCT_snn',
-  cluster_col = 'seurat_clusters_sct',
+  cluster_col = 'SCT_sample_clusters',
   method_label = 'SCT'
 )
 ```
@@ -1856,17 +1856,17 @@ safe_vlnplot <- function(obj, group_col, title_text) {
   ) + plot_annotation(title = title_text)
 }
 
-FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'umap_rna') +
+FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'UMAP_RNA_sample') +
   ggtitle('RNA UMAP: log10 nCount_RNA')
-FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'umap_rna') +
+FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'UMAP_RNA_sample') +
   ggtitle('RNA UMAP: log10 nFeature_RNA')
-safe_vlnplot(seurat, 'seurat_clusters_rna', 'RNA clusters: QC metrics')
+safe_vlnplot(seurat, 'RNA_sample_clusters', 'RNA clusters: QC metrics')
 
-FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'umap_sct') +
+FeaturePlot(seurat, features = 'nCount_RNA_log', reduction = 'UMAP_SCT_sample') +
   ggtitle('SCT UMAP: log10 nCount_RNA')
-FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'umap_sct') +
+FeaturePlot(seurat, features = 'nFeature_RNA_log', reduction = 'UMAP_SCT_sample') +
   ggtitle('SCT UMAP: log10 nFeature_RNA')
-safe_vlnplot(seurat, 'seurat_clusters_sct', 'SCT clusters: QC metrics')
+safe_vlnplot(seurat, 'SCT_sample_clusters', 'SCT clusters: QC metrics')
 ```
 
 # Red blood cells (post-clustering)
@@ -1934,7 +1934,7 @@ g2m_plot
 # S and G2M scores per cluster; high scores in a cluster suggest cycling cells
 s_vln <- VlnPlot(seurat, features = 'S.Score',   group.by = 'seurat_clusters',
                  assay = 'RNA', pt.size = 0) + NoLegend() + xlab('Cluster')
-g2m_vln <- VlnPlot(seurat, features = 'G2M.Score', group.by = 'seurat_clusters_sct',
+g2m_vln <- VlnPlot(seurat, features = 'G2M.Score', group.by = 'SCT_sample_clusters',
                    assay = 'RNA', pt.size = 0) + NoLegend() + xlab('Cluster')
 s_vln
 g2m_vln
@@ -1943,10 +1943,10 @@ g2m_vln
 ```{r cell-cycle-phase-table}
 # Counts and proportions of each phase per cluster for both methods
 phase_prop_rna <- as.data.frame(
-  prop.table(table(Cluster = seurat$seurat_clusters_rna, Phase = seurat$Phase), margin = 1)
+  prop.table(table(Cluster = seurat$RNA_sample_clusters, Phase = seurat$Phase), margin = 1)
 )
 phase_prop_sct <- as.data.frame(
-  prop.table(table(Cluster = seurat$seurat_clusters_sct, Phase = seurat$Phase), margin = 1)
+  prop.table(table(Cluster = seurat$SCT_sample_clusters, Phase = seurat$Phase), margin = 1)
 )
 
 ggplot(phase_prop_rna, aes(x = Cluster, y = Freq, fill = Phase)) +
@@ -2028,7 +2028,7 @@ myBreaks <- c(
 
 build_top_marker_heatmap(
   seurat,
-  cluster_col = 'seurat_clusters_rna',
+  cluster_col = 'RNA_sample_clusters',
   assay_name = 'RNA',
   layer_name = 'data',
   title_text = 'Top marker heatmap (LogNormalize method)'
@@ -2036,7 +2036,7 @@ build_top_marker_heatmap(
 
 build_top_marker_heatmap(
   seurat,
-  cluster_col = 'seurat_clusters_sct',
+  cluster_col = 'SCT_sample_clusters',
   assay_name = 'SCT',
   layer_name = 'data',
   title_text = 'Top marker heatmap (SCTransform normalisation)'
@@ -2157,14 +2157,14 @@ VlnPlot(seurat, features = adt_features[seq_len(min(6, length(adt_features)))],
 
 DefaultAssay(seurat) <- 'ADT_DSB'
 print(FeaturePlot(seurat, features = adt_features[seq_len(min(4, length(adt_features)))],
-                   reduction = 'umap_rna', ncol = 2) & scale_color_viridis_c())
+                   reduction = 'UMAP_RNA_sample', ncol = 2) & scale_color_viridis_c())
 DefaultAssay(seurat) <- 'RNA'
 ```
 
 ```{r adt-cluster-heatmap, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% SeuratObject::Assays(seurat)), fig.height=10, fig.width=8}
 # Average DSB-normalized ADT expression per SCT cluster (no marker test needed);
 # reuses the myColor/myBreaks palette defined in the marker-heatmap chunk above.
-adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'seurat_clusters_sct')
+adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'SCT_sample_clusters')
 adt_mat <- as.matrix(adt_avg[['ADT_DSB']])
 # Row scaling yields NaN for constant or non-finite rows, which breaks pheatmap clustering.
 adt_mat <- adt_mat[apply(adt_mat, 1, function(x) all(is.finite(x)) && stats::sd(x) > 0), , drop = FALSE]
@@ -2191,7 +2191,7 @@ Doublets are annotated but **not removed** here; reassess after integration/merg
 # save both annotations in metadata. Doublets are flagged but NOT removed here;
 # reassess after integration/merging.
 seurat_sce_clustered <- as.SingleCellExperiment(seurat)
-seurat_sce_clustered$cluster_for_dbl <- as.character(seurat$seurat_clusters_rna)
+seurat_sce_clustered$cluster_for_dbl <- as.character(seurat$RNA_sample_clusters)
 seurat_sce_clustered <- scDblFinder(seurat_sce_clustered, clusters = 'cluster_for_dbl')
 
 seurat_sce_unclustered <- as.SingleCellExperiment(seurat)
@@ -2213,26 +2213,26 @@ cat('Saved:', rds_path, '\n')
 
 ```{r doublet-plots}
 # Doublet distribution across RNA clusters for both scDblFinder runs
-cat('Clustered run (clusters = seurat_clusters_rna):\n')
-print(table(seurat$seurat_clusters_rna, seurat$doublet_class_clustered))
+cat('Clustered run (clusters = RNA_sample_clusters):\n')
+print(table(seurat$RNA_sample_clusters, seurat$doublet_class_clustered))
 cat('\nUnclustered run (clusters = NULL):\n')
-print(table(seurat$seurat_clusters_rna, seurat$doublet_class_unclustered))
+print(table(seurat$RNA_sample_clusters, seurat$doublet_class_unclustered))
 
 Idents(seurat) <- 'doublet_class_clustered'
-DimPlot(seurat, reduction = 'umap_rna') +
+DimPlot(seurat, reduction = 'UMAP_RNA_sample') +
   scale_color_manual(values = c('singlet' = 'grey70', 'doublet' = 'red3')) +
   ggtitle('scDblFinder (clustered): doublet class')
-FeaturePlot(seurat, features = 'doublet_score_clustered', reduction = 'umap_rna') +
+FeaturePlot(seurat, features = 'doublet_score_clustered', reduction = 'UMAP_RNA_sample') +
   ggtitle('scDblFinder (clustered): doublet score')
 
 Idents(seurat) <- 'doublet_class_unclustered'
-DimPlot(seurat, reduction = 'umap_rna') +
+DimPlot(seurat, reduction = 'UMAP_RNA_sample') +
   scale_color_manual(values = c('singlet' = 'grey70', 'doublet' = 'red3')) +
   ggtitle('scDblFinder (unclustered): doublet class')
-FeaturePlot(seurat, features = 'doublet_score_unclustered', reduction = 'umap_rna') +
+FeaturePlot(seurat, features = 'doublet_score_unclustered', reduction = 'UMAP_RNA_sample') +
   ggtitle('scDblFinder (unclustered): doublet score')
 
-Idents(seurat) <- 'seurat_clusters_rna'
+Idents(seurat) <- 'RNA_sample_clusters'
 VlnPlot(
   seurat,
   features = c('doublet_score_clustered', 'doublet_score_unclustered')
@@ -2267,7 +2267,7 @@ ggplot(doublet_umi_df, aes(x = doublet_class_unclustered, y = nCount_RNA, fill =
 
 # Proportion of doublets per cluster for each run
 prop.doublets.clustered <- as.data.frame(
-  prop.table(table(seurat$seurat_clusters_rna, seurat$doublet_class_clustered), margin = 1)
+  prop.table(table(seurat$RNA_sample_clusters, seurat$doublet_class_clustered), margin = 1)
 )
 ggplot(prop.doublets.clustered, aes(x = Var1, y = Freq, fill = Var2)) +
   geom_bar(stat = 'identity') +
@@ -2277,7 +2277,7 @@ ggplot(prop.doublets.clustered, aes(x = Var1, y = Freq, fill = Var2)) +
   ggtitle('Doublet fraction by cluster (clustered scDblFinder)')
 
 prop.doublets.unclustered <- as.data.frame(
-  prop.table(table(seurat$seurat_clusters_rna, seurat$doublet_class_unclustered), margin = 1)
+  prop.table(table(seurat$RNA_sample_clusters, seurat$doublet_class_unclustered), margin = 1)
 )
 ggplot(prop.doublets.unclustered, aes(x = Var1, y = Freq, fill = Var2)) +
   geom_bar(stat = 'identity') +
