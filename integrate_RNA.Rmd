@@ -14,7 +14,6 @@ output:
 params:
   merged_rds_path: "merged_QC.rds"
   integrated_rds_path: "integrated.rds"
-  integrated_sct_rds_path: "integrated_SCT.rds"
   output_dir: "."
   integration_level: "Batch"
   lisi_rds_path: "lisi_integrated_RNA.rds"
@@ -202,7 +201,6 @@ seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'harmony.sct', reduction.name
 Save all integration outputs with RPCA and Harmony reductions/clusters.
 ```{r save-integrated-objects, warning=F, message=F }
 saveRDS(seurat, file = params$integrated_rds_path)
-saveRDS(seurat, file = params$integrated_sct_rds_path)
 ```
 
 # LogNormalize RPCA integration analysis
@@ -302,6 +300,7 @@ if (!file.exists(markers_csv_path)) {
   avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'RNA_integrated_clusters_0.75')
   avg_exp <- avg_exp$RNA
   mat <- t(scale(t(avg_exp)))
+  mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
 }
 ```
@@ -402,6 +401,7 @@ if (!file.exists(markers_sct_csv_path)) {
   avg_exp <- AverageExpression(seurat, assays = 'SCT', features = markers, group.by = 'SCT_integrated_clusters_0.75')
   avg_exp <- avg_exp$SCT
   mat <- t(scale(t(avg_exp)))
+  mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
 }
 ```
@@ -489,6 +489,7 @@ if (!file.exists(markers_harmony_csv_path)) {
   avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'RNA_harmony_clusters_0.75')
   avg_exp <- avg_exp$RNA
   mat <- t(scale(t(avg_exp)))
+  mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
 }
 ```
@@ -573,6 +574,7 @@ if (!file.exists(markers_sct_harmony_csv_path)) {
   avg_exp <- AverageExpression(seurat, assays = 'SCT', features = markers, group.by = 'SCT_harmony_clusters_0.75')
   avg_exp <- avg_exp$SCT
   mat <- t(scale(t(avg_exp)))
+  mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
 }
 ```
@@ -698,7 +700,10 @@ if (is.na(cluster_col)) {
 } else {
   adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = cluster_col)
   adt_mat <- adt_avg[['ADT_DSB']]
-  if (nrow(adt_mat) > 0 && ncol(adt_mat) > 0) {
+  # Constant rows scale to NaN, which breaks pheatmap clustering.
+  adt_mat <- as.matrix(adt_mat)
+  adt_mat <- adt_mat[apply(adt_mat, 1, function(x) all(is.finite(x)) && stats::sd(x) > 0), , drop = FALSE]
+  if (nrow(adt_mat) > 1 && ncol(adt_mat) > 1) {
     paletteLength <- 50
     myColor  <- colorRampPalette(c('blue', 'white', 'red'))(paletteLength)
     myBreaks <- c(seq(-3, 0, length.out = ceiling(paletteLength / 2) + 1),

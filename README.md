@@ -47,7 +47,7 @@ GitHub repository: https://github.com/mgildea87/scRNAseq_QC
 - Load `merged_QC.rds` and validate required integration grouping metadata (`Batch` or `Sample` level)
 - RNA integration workflow: split assay layers by integration group, normalize, find variable features, scale, PCA, RPCA integration, neighbors, clustering, UMAP
 - SCT integration workflow: apply `SCTransform`, split SCT layers by integration group, PCA, RPCA integration, neighbors, clustering, UMAP
-- Save integrated objects (`integrated.rds` for RNA and `integrated_SCT.rds` for SCT)
+- Save the integrated object (`integrated.rds`, containing RNA, SCT, RPCA and Harmony results)
 - Plot integrated UMAPs colored by sample, batch, and integrated cluster IDs (RNA and SCT)
 - Compute and visualize cluster abundance distributions across samples and batches (RNA and SCT integrated clusters)
 - Compute LISI batch-mixing scores for integrated embeddings (RNA and SCT), save RDS outputs, and visualize distributions

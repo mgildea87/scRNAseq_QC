@@ -457,6 +457,12 @@ plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
   avg_exp <- AverageExpression(seurat, assays = assay_name, features = markers, group.by = group_col)
   avg_exp <- avg_exp[[assay_name]]
   mat <- t(scale(t(avg_exp)))
+  # Zero-variance rows scale to NaN, which breaks pheatmap clustering.
+  mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
+  if (nrow(mat) < 2 || ncol(mat) < 2) {
+    message('Skipping marker heatmap: too few finite rows/columns for ', plot_title)
+    return(invisible(NULL))
+  }
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T, main = plot_title)
   invisible(mat)
 }
