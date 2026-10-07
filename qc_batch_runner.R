@@ -602,9 +602,13 @@ render_sample <- function(row) {
 
   result <- tryCatch({
     template_support_dir <- file.path(dirname(normalizePath(opt$template, mustWork = TRUE)), "support_files")
+    # Concurrent renders of one template otherwise share sample_QC.knit.md and figures.
+    sample_intermediates_dir <- file.path(opt$output_dir, "intermediates", sample_name)
+    dir.create(sample_intermediates_dir, showWarnings = FALSE, recursive = TRUE)
     rmarkdown::render(
       input         = opt$template,
       output_file   = out_html,
+      intermediates_dir = sample_intermediates_dir,
       params        = list(
         sample_name      = sample_name,
         batch            = row[["batch"]],

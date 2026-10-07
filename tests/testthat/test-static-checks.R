@@ -45,6 +45,13 @@ testthat::test_that("runner forwards separate raw ADT background path", {
   testthat::expect_match(runner_text, "raw_adt_path     = row[[\"raw_adt_path\"]]", fixed = TRUE)
 })
 
+testthat::test_that("sample renders use a per-sample intermediates directory", {
+  runner_text <- paste(readLines(file.path(repo_root, "qc_batch_runner.R"), warn = FALSE),
+                       collapse = "\n")
+  testthat::expect_match(runner_text, "intermediates_dir = sample_intermediates_dir", fixed = TRUE)
+  testthat::expect_match(runner_text, "file.path(opt$output_dir, \"intermediates\", sample_name)", fixed = TRUE)
+})
+
 testthat::test_that("integration level defaults to Sample and accepts Batch", {
   runner_expressions <- parse(file.path(repo_root, "qc_batch_runner.R"))
   parser_assignment <- Filter(function(expression) {
