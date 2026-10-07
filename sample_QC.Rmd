@@ -2161,7 +2161,29 @@ print(FeaturePlot(seurat, features = adt_features[seq_len(min(4, length(adt_feat
 DefaultAssay(seurat) <- 'RNA'
 ```
 
-```{r adt-cluster-heatmap, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% SeuratObject::Assays(seurat)), fig.height=10, fig.width=8}
+```{r adt-cluster-heatmap-1, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% SeuratObject::Assays(seurat)), fig.height=10, fig.width=8}
+# Average DSB-normalized ADT expression per log-norm cluster (no marker test needed);
+# reuses the myColor/myBreaks palette defined in the marker-heatmap chunk above.
+adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'RNA_sample_clusters')
+adt_mat <- as.matrix(adt_avg[['ADT_DSB']])
+# Row scaling yields NaN for constant or non-finite rows, which breaks pheatmap clustering.
+adt_mat <- adt_mat[apply(adt_mat, 1, function(x) all(is.finite(x)) && stats::sd(x) > 0), , drop = FALSE]
+if (nrow(adt_mat) > 1 && ncol(adt_mat) > 1) {
+  pheatmap::pheatmap(
+    adt_mat,
+    scale = 'row',
+    color = myColor,
+    border_color = NULL,
+    breaks = myBreaks,
+    fontsize = 6,
+    main = 'DSB-normalized average ADT expression per cluster (log-norm clusters)'
+  )
+} else {
+  cat('Empty ADT average expression matrix; skipping heatmap.\n')
+}
+```
+
+```{r adt-cluster-heatmap-2, eval=isTRUE(params$use_adt) && ('ADT_DSB' %in% SeuratObject::Assays(seurat)), fig.height=10, fig.width=8}
 # Average DSB-normalized ADT expression per SCT cluster (no marker test needed);
 # reuses the myColor/myBreaks palette defined in the marker-heatmap chunk above.
 adt_avg <- AverageExpression(seurat, features = adt_features, assay = 'ADT_DSB', layer = 'data', group.by = 'SCT_sample_clusters')
