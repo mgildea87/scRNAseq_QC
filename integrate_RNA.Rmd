@@ -147,8 +147,8 @@ seurat <- FindVariableFeatures(seurat, assay = 'RNA')
 seurat <- ScaleData(seurat, assay = 'RNA')
 seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_split')
 seurat <- IntegrateLayers(object = seurat, method = RPCAIntegration, orig.reduction = "PCA_RNA_split", new.reduction = "RPCA_RNA_integrated",verbose = FALSE, assay = 'RNA')
-seurat <- FindNeighbors(seurat, reduction = "RPCA_RNA_integrated", dims = 1:30)
-seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = "RNA_rpca_clusters_0.75", algorithm = 4)
+seurat <- FindNeighbors(seurat, reduction = "RPCA_RNA_integrated", dims = 1:30, assay = 'RNA', graph.name = c('RNA_rpca_nn', 'RNA_rpca_snn'))
+seurat <- FindClusters(seurat, graph.name = 'RNA_rpca_snn', resolution = 0.75, cluster.name = "RNA_rpca_clusters_0.75", algorithm = 4)
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'RPCA_RNA_integrated', reduction.name = 'UMAP_RNA_rpca')
 ```
 
@@ -161,8 +161,8 @@ options(future.globals.maxSize = 8000 * 1024^8)
 DefaultAssay(seurat) <- "SCT"
 seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_split', row.names(seurat@assays$SCT$scale.data))
 seurat <- IntegrateLayers(object = seurat, method = RPCAIntegration, orig.reduction = "PCA_SCT_split", new.reduction = "RPCA_SCT_integrated",verbose = FALSE, assay = 'SCT', normalization.method = "SCT")
-seurat <- FindNeighbors(seurat, reduction = "RPCA_SCT_integrated", dims = 1:30)
-seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = "SCT_rpca_clusters_0.75", algorithm = 4)
+seurat <- FindNeighbors(seurat, reduction = "RPCA_SCT_integrated", dims = 1:30, assay = 'SCT', graph.name = c('SCT_rpca_nn', 'SCT_rpca_snn'))
+seurat <- FindClusters(seurat, graph.name = 'SCT_rpca_snn', resolution = 0.75, cluster.name = "SCT_rpca_clusters_0.75", algorithm = 4)
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'RPCA_SCT_integrated', reduction.name = 'UMAP_SCT_rpca')
 ```
 
@@ -177,8 +177,8 @@ seurat <- RunHarmony(
   reduction.save = 'HARMONY_RNA_integrated',
   verbose = FALSE
 )
-seurat <- FindNeighbors(seurat, reduction = 'HARMONY_RNA_integrated', dims = 1:30)
-seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = 'RNA_harmony_clusters_0.75', algorithm = 4)
+seurat <- FindNeighbors(seurat, reduction = 'HARMONY_RNA_integrated', dims = 1:30, assay = 'RNA', graph.name = c('RNA_harmony_nn', 'RNA_harmony_snn'))
+seurat <- FindClusters(seurat, graph.name = 'RNA_harmony_snn', resolution = 0.75, cluster.name = 'RNA_harmony_clusters_0.75', algorithm = 4)
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'HARMONY_RNA_integrated', reduction.name = 'UMAP_RNA_harmony')
 ```
 
@@ -193,8 +193,8 @@ seurat <- RunHarmony(
   reduction.save = 'HARMONY_SCT_integrated',
   verbose = FALSE
 )
-seurat <- FindNeighbors(seurat, reduction = 'HARMONY_SCT_integrated', dims = 1:30, assay = 'SCT')
-seurat <- FindClusters(seurat, resolution = 0.75, cluster.name = 'SCT_harmony_clusters_0.75', algorithm = 4)
+seurat <- FindNeighbors(seurat, reduction = 'HARMONY_SCT_integrated', dims = 1:30, assay = 'SCT', graph.name = c('SCT_harmony_nn', 'SCT_harmony_snn'))
+seurat <- FindClusters(seurat, graph.name = 'SCT_harmony_snn', resolution = 0.75, cluster.name = 'SCT_harmony_clusters_0.75', algorithm = 4)
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'HARMONY_SCT_integrated', reduction.name = 'UMAP_SCT_harmony', assay = 'SCT')
 ```
 

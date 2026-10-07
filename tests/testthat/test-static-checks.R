@@ -52,6 +52,33 @@ testthat::test_that("sample renders use a per-sample intermediates directory", {
   testthat::expect_match(runner_text, "file.path(opt$output_dir, \"intermediates\", sample_name)", fixed = TRUE)
 })
 
+testthat::test_that("every FindClusters call names its graph explicitly", {
+  for (rmd in c("sample_QC.Rmd", "merge_analysis.Rmd", "integrate_RNA.Rmd")) {
+    lines <- readLines(file.path(repo_root, rmd), warn = FALSE)
+    calls <- grep("FindClusters\\(", lines, value = TRUE)
+    testthat::expect_gt(length(calls), 0L)
+    testthat::expect_true(all(grepl("graph.name = ", calls, fixed = TRUE)), info = rmd)
+  }
+})
+
+testthat::test_that("named graphs and cluster columns work with Seurat", {
+  testthat::skip_if_not_installed("Seurat")
+  set.seed(1)
+  counts <- matrix(rpois(200 * 120, 2), nrow = 200,
+                   dimnames = list(paste0("g", 1:200), paste0("c", 1:120)))
+  obj <- suppressWarnings(Seurat::CreateSeuratObject(counts))
+  obj <- suppressWarnings(Seurat::NormalizeData(obj, verbose = FALSE))
+  obj <- suppressWarnings(Seurat::FindVariableFeatures(obj, verbose = FALSE))
+  obj <- suppressWarnings(Seurat::ScaleData(obj, verbose = FALSE))
+  obj <- suppressWarnings(Seurat::RunPCA(obj, npcs = 10, reduction.name = "PCA_RNA_sample", verbose = FALSE))
+  obj <- Seurat::FindNeighbors(obj, reduction = "PCA_RNA_sample", dims = 1:10, assay = "RNA",
+                               graph.name = c("RNA_sample_nn", "RNA_sample_snn"), verbose = FALSE)
+  obj <- Seurat::FindClusters(obj, graph.name = "RNA_sample_snn", cluster.name = "RNA_sample_clusters",
+                              algorithm = 1, verbose = FALSE)
+  testthat::expect_true(all(c("RNA_sample_nn", "RNA_sample_snn") %in% names(obj@graphs)))
+  testthat::expect_true("RNA_sample_clusters" %in% colnames(obj@meta.data))
+})
+
 testthat::test_that("integration level defaults to Sample and accepts Batch", {
   runner_expressions <- parse(file.path(repo_root, "qc_batch_runner.R"))
   parser_assignment <- Filter(function(expression) {

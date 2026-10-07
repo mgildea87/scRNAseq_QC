@@ -1565,8 +1565,8 @@ seurat <- FindVariableFeatures(seurat, assay = 'RNA')
 seurat <- ScaleData(seurat, assay = 'RNA')
 seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_sample')
 ElbowPlot(seurat, reduction = 'PCA_RNA_sample')
-seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_sample', dims = 1:30)
-seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'RNA_sample_clusters')
+seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_sample', dims = 1:30, graph.name = c('RNA_sample_nn', 'RNA_sample_snn'))
+seurat <- FindClusters(seurat, graph.name = 'RNA_sample_snn', algorithm = 4, cluster.name = 'RNA_sample_clusters')
 seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_RNA_sample', reduction.name = 'UMAP_RNA_sample')
 ```
 
@@ -1666,8 +1666,8 @@ sctransform::plot_model_pars(vst_out, show_theta = TRUE) + theme_bw()
 seurat <- SCTransform(seurat, assay = 'RNA', new.assay.name = 'SCT', verbose = FALSE, vst.flavor = "v2")
 
 seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_sample')
-seurat <- FindNeighbors(seurat, reduction = 'PCA_SCT_sample', dims = 1:30)
-seurat <- FindClusters(seurat, algorithm = 4, cluster.name = 'SCT_sample_clusters')
+seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_sample', dims = 1:30, graph.name = c('SCT_sample_nn', 'SCT_sample_snn'))
+seurat <- FindClusters(seurat, graph.name = 'SCT_sample_snn', algorithm = 4, cluster.name = 'SCT_sample_clusters')
 seurat <- RunUMAP(seurat, reduction = 'PCA_SCT_sample', dims = 1:30, reduction.name = 'UMAP_SCT_sample')
 
 # Keep a default cluster column for compatibility with downstream tooling.
@@ -1812,14 +1812,14 @@ plot_method_modularity <- function(obj, graph_name, cluster_col, method_label) {
 
 plot_method_modularity(
   seurat,
-  graph_name = 'RNA_snn',
+  graph_name = 'RNA_sample_snn',
   cluster_col = 'RNA_sample_clusters',
   method_label = 'LogNormalize method'
 )
 
 plot_method_modularity(
   seurat,
-  graph_name = 'SCT_snn',
+  graph_name = 'SCT_sample_snn',
   cluster_col = 'SCT_sample_clusters',
   method_label = 'SCT'
 )

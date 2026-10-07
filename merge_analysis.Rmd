@@ -153,8 +153,8 @@ if (need_reduction || need_clusters) {
   seurat <- ScaleData(seurat, assay = 'RNA')
   seurat <- RunPCA(seurat, assay = 'RNA', reduction.name = 'PCA_RNA_merged')
   seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_RNA_merged', assay = 'RNA', reduction.name = 'UMAP_RNA_merged')
-  seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_merged', dims = c(1:30))
-  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'RNA_merged_clusters')
+  seurat <- FindNeighbors(seurat, assay = 'RNA', reduction = 'PCA_RNA_merged', dims = c(1:30), graph.name = c('RNA_merged_nn', 'RNA_merged_snn'))
+  seurat <- FindClusters(seurat, graph.name = 'RNA_merged_snn', resolution = 0.75, algorithm = 4, cluster.name = 'RNA_merged_clusters')
 }
 
 if (need_sct_reduction || need_sct_clusters) {
@@ -163,8 +163,8 @@ if (need_sct_reduction || need_sct_clusters) {
   DefaultAssay(seurat) <- 'SCT'
   seurat <- RunPCA(seurat, assay = 'SCT', reduction.name = 'PCA_SCT_merged', features = row.names(seurat@assays$SCT))
   seurat <- RunUMAP(seurat, dims = 1:30, reduction = 'PCA_SCT_merged', assay = 'SCT', reduction.name = 'UMAP_SCT_merged')
-  seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_merged', dims = c(1:30))
-  seurat <- FindClusters(seurat, resolution = 0.75, algorithm = 4, cluster.name = 'SCT_merged_clusters')
+  seurat <- FindNeighbors(seurat, assay = 'SCT', reduction = 'PCA_SCT_merged', dims = c(1:30), graph.name = c('SCT_merged_nn', 'SCT_merged_snn'))
+  seurat <- FindClusters(seurat, graph.name = 'SCT_merged_snn', resolution = 0.75, algorithm = 4, cluster.name = 'SCT_merged_clusters')
 }
 
 saveRDS(seurat, file = 'merged_QC.rds')
