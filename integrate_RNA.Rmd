@@ -128,6 +128,11 @@ if (!file.exists(params$merged_rds_path)) {
 }
 seurat <- readRDS(params$merged_rds_path)
 
+rna_features <- rownames(seurat[['RNA']])
+malat1_candidates <- c('MALAT1', 'Malat1')
+malat1_feature <- malat1_candidates[malat1_candidates %in% rna_features][1]
+if (length(malat1_feature) == 0L) malat1_feature <- NA_character_
+
 if (!integration_group_column %in% colnames(seurat@meta.data)) {
   stop('Missing integration metadata column: ', integration_group_column)
 }
@@ -274,7 +279,9 @@ QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 
 VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0, log = TRUE)+NoLegend()
 VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0, log = TRUE)+NoLegend()
 VlnPlot(seurat, features = 'percent.mt', pt.size = 0)+NoLegend()
-VlnPlot(seurat, features = 'Malat1', pt.size = 0)+NoLegend()
+if (!is.na(malat1_feature)) {
+  VlnPlot(seurat, features = malat1_feature, pt.size = 0)+NoLegend()
+}
 ```
 
 ## Differential expression (cluster markers)
@@ -376,7 +383,9 @@ QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 
 VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0, log = TRUE)+NoLegend()
 VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0, log = TRUE)+NoLegend()
 VlnPlot(seurat, features = 'percent.mt', pt.size = 0)+NoLegend()
-VlnPlot(seurat, features = 'Malat1', pt.size = 0)+NoLegend()
+if (!is.na(malat1_feature)) {
+  VlnPlot(seurat, features = malat1_feature, pt.size = 0)+NoLegend()
+}
 ```
 
 ## Differential expression (cluster markers)
@@ -464,7 +473,9 @@ QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 
 VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0, log = TRUE, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
 VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0, log = TRUE, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
 VlnPlot(seurat, features = 'percent.mt', pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
-VlnPlot(seurat, features = 'Malat1', pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
+if (!is.na(malat1_feature)) {
+  VlnPlot(seurat, features = malat1_feature, pt.size = 0, group.by = 'RNA_harmony_clusters_0.75')+NoLegend()
+}
 ```
 
 ## Differential expression (cluster markers)
@@ -550,7 +561,9 @@ QC diagnostics: summarize RNA count/feature, mitochondrial fraction, and Malat1 
 VlnPlot(seurat, features = 'nCount_RNA', pt.size = 0, log = TRUE, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
 VlnPlot(seurat, features = 'nFeature_RNA', pt.size = 0, log = TRUE, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
 VlnPlot(seurat, features = 'percent.mt', pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
-VlnPlot(seurat, features = 'Malat1', pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
+if (!is.na(malat1_feature)) {
+  VlnPlot(seurat, features = malat1_feature, pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
+}
 ```
 
 ## Differential expression (cluster markers)
