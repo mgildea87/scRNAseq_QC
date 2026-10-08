@@ -428,6 +428,7 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 | `--run_integration` | `FALSE` | Run optional post-merge integration report (`integrate_RNA.Rmd`); works with `--merge_only TRUE` after successful merge (requires at least 2 samples) |
 | `--integration_level` | `Sample` | Integration grouping level: `Batch` or `Sample` |
 | `--integration_only` | `FALSE` | Skip sample QC and merge; run only `integrate_RNA.Rmd` using existing `merged_QC.rds` |
+| `--node_type` | `cpu_short` | SLURM partition to request for all jobs |
 | `--time` | `2:00:00` | Wall time per job — max on `cpu_short` is `12:00:00` |
 
 #### Flag compatibility

@@ -16,6 +16,7 @@
 #   --merge_mem   <GB>    memory for merge job in GB         (default: 64)
 #   --integration_mem <GB> memory for integration job in GB   (default: 64)
 #   --time        <HH:MM> wall time per job                 (default: 2:00:00)
+#   --node_type   <name>  SLURM partition to request         (default: cpu_short)
 #   --merge_only  <TRUE/FALSE> skip per-sample QC and run merge_analysis from existing sample RDS files (default: FALSE)
 #   --skip_merge  <TRUE/FALSE> skip submitting merge job     (default: FALSE)
 #   --run_integration <TRUE/FALSE> render integrate_RNA.Rmd after merge (default: FALSE)
@@ -43,6 +44,7 @@ MEM_GB=32
 MERGE_MEM_GB=64
 INTEGRATION_MEM_GB=64
 WALL_TIME="2:00:00"
+NODE_TYPE="cpu_short"
 MERGE_ONLY="FALSE"
 SKIP_MERGE="FALSE"
 RUN_INTEGRATION="FALSE"
@@ -53,7 +55,7 @@ USE_CELLBENDER="FALSE"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h)
-      sed -n '1,26p' "$0" # prints header block lines
+      sed -n '1,27p' "$0" # prints header block lines
       exit 0
       ;;
     --sample_sheet)
@@ -100,6 +102,14 @@ while [[ $# -gt 0 ]]; do
       WALL_TIME="${2-}"
       if [[ -z "${WALL_TIME}" || "${WALL_TIME}" == --* ]]; then
         echo "ERROR: --time requires a value." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --node_type)
+      NODE_TYPE="${2-}"
+      if [[ -z "${NODE_TYPE}" || "${NODE_TYPE}" == --* ]]; then
+        echo "ERROR: --node_type requires a value." >&2
         exit 1
       fi
       shift 2
@@ -320,13 +330,13 @@ fi
 echo "Submitting ${#SAMPLES[@]} job(s)..."
 echo "  Sample sheet : ${SAMPLE_SHEET}"
 echo "  Output dir   : ${OUTPUT_DIR}"
-echo "  Partition    : cpu_short  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Merge only: ${MERGE_ONLY}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}"
+echo "  Partition    : ${NODE_TYPE}  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Merge only: ${MERGE_ONLY}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}"
 echo "----------------------------------------------"
 
 if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
   INTEGRATE_JOB_ID=$(sbatch \
     --job-name="QC_integrate" \
-    --partition=cpu_short \
+    --partition="${NODE_TYPE}" \
     --ntasks=1 \
     --cpus-per-task=1 \
     --mem="${INTEGRATION_MEM_GB}G" \
@@ -366,7 +376,7 @@ fi
 if [[ "${MERGE_ONLY}" == "TRUE" ]]; then
   MERGE_ONLY_JOB_ID=$(sbatch \
     --job-name="QC_merge_only" \
-    --partition=cpu_short \
+    --partition="${NODE_TYPE}" \
     --ntasks=1 \
     --cpus-per-task=1 \
     --mem="${MERGE_MEM_GB}G" \
@@ -409,7 +419,7 @@ SAMPLE_JOB_IDS=()
 for SAMPLE in "${SAMPLES[@]}"; do
   JOB_ID=$(sbatch \
     --job-name="QC_${SAMPLE}" \
-    --partition=cpu_short \
+    --partition="${NODE_TYPE}" \
     --ntasks=1 \
     --cpus-per-task=1 \
     --mem="${MEM_GB}G" \
@@ -534,7 +544,7 @@ fi
 if [[ "${RUN_INTEGRATION}" == "TRUE" ]]; then
   INTEGRATE_JOB_ID=\$(sbatch \
     --job-name="QC_integrate" \
-    --partition=cpu_short \
+    --partition="${NODE_TYPE}" \
     --ntasks=1 \
     --cpus-per-task=1 \
     --mem="${INTEGRATION_MEM_GB}G" \
@@ -564,7 +574,7 @@ ${SAMPLE_CHECK_LINES}
 echo "Submitting merge job..."
 MERGE_JOB_ID=\$(sbatch \
   --job-name="QC_merge" \
-  --partition=cpu_short \
+  --partition="${NODE_TYPE}" \
   --ntasks=1 \
   --cpus-per-task=1 \
   --mem="${MERGE_MEM_GB}G" \
@@ -579,7 +589,7 @@ EOF
 
   MERGE_SUBMITTER_JOB_ID=$(sbatch \
     --job-name="QC_merge_submit" \
-    --partition=cpu_short \
+    --partition="${NODE_TYPE}" \
     --ntasks=1 \
     --cpus-per-task=1 \
     --mem="1G" \
