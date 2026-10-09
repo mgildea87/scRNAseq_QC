@@ -138,6 +138,66 @@ if (!integration_group_column %in% colnames(seurat@meta.data)) {
 }
 ```
 
+Doublet plotting helpers: shared by each integration section below.
+```{r doublet-helpers, warning=F, message=F }
+doublet_runs <- data.frame(
+  class_col = c('doublet_class_clustered', 'doublet_class_unclustered'),
+  run_label = c('clustered', 'unclustered'),
+  stringsAsFactors = FALSE
+)
+doublet_runs <- doublet_runs[doublet_runs$class_col %in% colnames(seurat@meta.data), , drop = FALSE]
+
+plot_doublet_umaps <- function(reduction, method_label) {
+  if (nrow(doublet_runs) == 0) {
+    message('Skipping doublet highlight UMAPs: no doublet class metadata columns found.')
+    return(invisible(NULL))
+  }
+  for (i in seq_len(nrow(doublet_runs))) {
+    class_col <- doublet_runs$class_col[i]
+    run_label <- doublet_runs$run_label[i]
+    doublet_cells <- rownames(seurat@meta.data)[tolower(as.character(seurat[[class_col]][, 1])) == 'doublet']
+    if (!length(doublet_cells)) {
+      message('Skipping ', run_label, ' doublet highlight UMAP: no cells labeled as doublet in ', class_col, '.')
+      next
+    }
+    print(
+      DimPlot(seurat,
+              reduction = reduction,
+              cells.highlight = doublet_cells,
+              cols = 'grey80',
+              cols.highlight = 'firebrick',
+              sizes.highlight = 0.6,
+              raster = F) +
+        ggtitle(paste(method_label, ' UMAP highlighting doublets (', run_label, ')', sep = ''))
+    )
+  }
+  invisible(NULL)
+}
+
+plot_doublet_frequency <- function(cluster_col, method_label) {
+  if (nrow(doublet_runs) == 0 || !cluster_col %in% colnames(seurat@meta.data)) {
+    message('Skipping ', method_label, ' doublet frequency plots: missing metadata columns.')
+    return(invisible(NULL))
+  }
+  for (i in seq_len(nrow(doublet_runs))) {
+    class_col <- doublet_runs$class_col[i]
+    run_label <- doublet_runs$run_label[i]
+    doublet_freq <- as.data.frame(prop.table(table(seurat[[cluster_col]][, 1], seurat[[class_col]][, 1]), margin = 1))
+    colnames(doublet_freq) <- c('cluster', 'doublet_class', 'frequency')
+    print(
+      ggplot(doublet_freq, aes(x = cluster, y = frequency, fill = doublet_class)) +
+        geom_col(position = 'stack') +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 315, hjust = 0, vjust = 1)) +
+        ylab('Fraction of cells') +
+        xlab('Cluster') +
+        ggtitle(paste('Doublet class frequency by ', method_label, ' clusters (', run_label, ')', sep = ''))
+    )
+  }
+  invisible(NULL)
+}
+```
+
 Integration workflow: split by selected level, integrate RNA, cluster, and save output RDS.
 ```{r integrate-log-norm, warning=F, message=F }
 print(paste('Integrating RNA at level:', params$integration_level))
@@ -284,6 +344,16 @@ if (!is.na(malat1_feature)) {
 }
 ```
 
+## Doublets
+Doublet annotations from sample QC highlighted on the RPCA log-norm UMAP and summarized per cluster.
+```{r doublet-umap-rpca-rna, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+plot_doublet_umaps('UMAP_RNA_rpca', 'RPCA log-norm')
+```
+
+```{r doublet-frequency-rpca-rna, fig.height=6, fig.width=14, warning=F, message=F, eval = T}
+plot_doublet_frequency('RNA_rpca_clusters_0.75', 'RPCA log-norm')
+```
+
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across integrated clusters.
 ```{r find-cluster-markers, eval = T, warning=F, message=F}
@@ -388,6 +458,16 @@ if (!is.na(malat1_feature)) {
 }
 ```
 
+## Doublets
+Doublet annotations from sample QC highlighted on the RPCA SCT UMAP and summarized per cluster.
+```{r doublet-umap-rpca-sct, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+plot_doublet_umaps('UMAP_SCT_rpca', 'RPCA SCT')
+```
+
+```{r doublet-frequency-rpca-sct, fig.height=6, fig.width=14, warning=F, message=F, eval = T}
+plot_doublet_frequency('SCT_rpca_clusters_0.75', 'RPCA SCT')
+```
+
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across SCT-integrated clusters.
 ```{r find-cluster-markers-sct, eval = T, warning=F, message=F}
@@ -478,6 +558,16 @@ if (!is.na(malat1_feature)) {
 }
 ```
 
+## Doublets
+Doublet annotations from sample QC highlighted on the Harmony log-norm UMAP and summarized per cluster.
+```{r doublet-umap-harmony-rna, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+plot_doublet_umaps('UMAP_RNA_harmony', 'Harmony log-norm')
+```
+
+```{r doublet-frequency-harmony-rna, fig.height=6, fig.width=14, warning=F, message=F, eval = T}
+plot_doublet_frequency('RNA_harmony_clusters_0.75', 'Harmony log-norm')
+```
+
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across RNA Harmony clusters.
 ```{r find-cluster-markers-harmony-rna, eval = T, warning=F, message=F}
@@ -564,6 +654,16 @@ VlnPlot(seurat, features = 'percent.mt', pt.size = 0, group.by = 'SCT_harmony_cl
 if (!is.na(malat1_feature)) {
   VlnPlot(seurat, features = malat1_feature, pt.size = 0, group.by = 'SCT_harmony_clusters_0.75')+NoLegend()
 }
+```
+
+## Doublets
+Doublet annotations from sample QC highlighted on the Harmony SCT UMAP and summarized per cluster.
+```{r doublet-umap-harmony-sct, fig.height=7, fig.width=10, warning=F, message=F, eval = T}
+plot_doublet_umaps('UMAP_SCT_harmony', 'Harmony SCT')
+```
+
+```{r doublet-frequency-harmony-sct, fig.height=6, fig.width=14, warning=F, message=F, eval = T}
+plot_doublet_frequency('SCT_harmony_clusters_0.75', 'Harmony SCT')
 ```
 
 ## Differential expression (cluster markers)
