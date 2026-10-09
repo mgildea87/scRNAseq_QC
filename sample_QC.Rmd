@@ -2224,10 +2224,6 @@ seurat$doublet_score_clustered <- seurat_sce_clustered$scDblFinder.score
 seurat$doublet_class_unclustered <- seurat_sce_unclustered$scDblFinder.class
 seurat$doublet_score_unclustered <- seurat_sce_unclustered$scDblFinder.score
 
-# Keep compatibility columns mapped to the clustered run.
-seurat$doublet_class <- seurat$doublet_class_clustered
-seurat$doublet_score <- seurat$doublet_score_clustered
-
 rds_path <- file.path(params$output_dir, paste0(params$sample_name, '_QC.rds'))
 saveRDS(seurat, file = rds_path)
 cat('Saved:', rds_path, '\n')

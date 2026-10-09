@@ -606,8 +606,8 @@ Visualize merged doublet annotations on both RNA and SCT UMAPs and summarize dou
 
 ```{r doublet-umap-highlights, fig.height=7, fig.width=10, warning=F, message=F}
 doublet_runs <- data.frame(
-  class_col = c('doublet_class_clustered', 'doublet_class_unclustered', 'doublet_class'),
-  run_label = c('clustered', 'unclustered', 'legacy/default'),
+  class_col = c('doublet_class_clustered', 'doublet_class_unclustered'),
+  run_label = c('clustered', 'unclustered'),
   stringsAsFactors = FALSE
 )
 doublet_runs <- doublet_runs[doublet_runs$class_col %in% colnames(seurat@meta.data), , drop = FALSE]
@@ -676,8 +676,8 @@ plot_doublet_frequency <- function(cluster_col, reduction_label, class_col, run_
 }
 
 doublet_runs <- data.frame(
-  class_col = c('doublet_class_clustered', 'doublet_class_unclustered', 'doublet_class'),
-  run_label = c('clustered', 'unclustered', 'legacy/default'),
+  class_col = c('doublet_class_clustered', 'doublet_class_unclustered'),
+  run_label = c('clustered', 'unclustered'),
   stringsAsFactors = FALSE
 )
 doublet_runs <- doublet_runs[doublet_runs$class_col %in% colnames(seurat@meta.data), , drop = FALSE]
