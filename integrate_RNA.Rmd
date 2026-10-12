@@ -203,6 +203,8 @@ Integration workflow: split by selected level, integrate RNA, cluster, and save 
 print(paste('Integrating RNA at level:', params$integration_level))
 options(future.globals.maxSize = 8000 * 1024^8)
 
+# merged_QC.rds may be saved with DefaultAssay == 'SCT'; pin it explicitly here.
+DefaultAssay(seurat) <- 'RNA'
 seurat[["RNA"]] <- split(
   seurat[["RNA"]],
   f = seurat@meta.data[[integration_group_column]]
