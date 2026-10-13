@@ -473,7 +473,7 @@ plot_doublet_frequency('SCT_rpca_clusters_0.75', 'RPCA SCT')
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across SCT-integrated clusters.
 ```{r find-cluster-markers-sct, eval = T, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'SCT_rpca_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'SCT', out_dir = 'FindMarkersBulk_SCT_integrated_rpca')
+FindMarkersBulk(seurat, clus_ident = 'SCT_rpca_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_SCT_integrated_rpca')
 ```
 
 ## Top marker heatmap SCT
@@ -489,8 +489,8 @@ if (!file.exists(markers_sct_csv_path)) {
 } else {
   markers <- read.csv(markers_sct_csv_path)
   markers <- markers$x
-  avg_exp <- AverageExpression(seurat, assays = 'SCT', features = markers, group.by = 'SCT_rpca_clusters_0.75')
-  avg_exp <- avg_exp$SCT
+  avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'SCT_rpca_clusters_0.75')
+  avg_exp <- avg_exp$RNA
   mat <- t(scale(t(avg_exp)))
   mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)
@@ -671,7 +671,7 @@ plot_doublet_frequency('SCT_harmony_clusters_0.75', 'Harmony SCT')
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across SCT Harmony clusters.
 ```{r find-cluster-markers-harmony-sct, eval = T, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'SCT_harmony_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'SCT', out_dir = 'FindMarkersBulk_SCT_integrated_harmony')
+FindMarkersBulk(seurat, clus_ident = 'SCT_harmony_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_SCT_integrated_harmony')
 ```
 
 ## Top marker heatmap SCT Harmony
@@ -686,8 +686,8 @@ if (!file.exists(markers_sct_harmony_csv_path)) {
 } else {
   markers <- read.csv(markers_sct_harmony_csv_path)
   markers <- markers$x
-  avg_exp <- AverageExpression(seurat, assays = 'SCT', features = markers, group.by = 'SCT_harmony_clusters_0.75')
-  avg_exp <- avg_exp$SCT
+  avg_exp <- AverageExpression(seurat, assays = 'RNA', features = markers, group.by = 'SCT_harmony_clusters_0.75')
+  avg_exp <- avg_exp$RNA
   mat <- t(scale(t(avg_exp)))
   mat <- mat[apply(mat, 1, function(x) all(is.finite(x))), , drop = FALSE]
   pheatmap(mat, color = myColor, breaks = myBreaks, fontsize = 6, cluster_cols = T)

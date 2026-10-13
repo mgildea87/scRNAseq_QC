@@ -468,7 +468,7 @@ plot_marker_heatmap <- function(marker_csv, group_col, assay_name, plot_title) {
 }
 
 mat_rna <- plot_marker_heatmap('FindMarkersBulk_merged_LogNormalize/Top_markers.csv', 'RNA_merged_clusters', 'RNA', 'Top marker heatmap - log-norm')
-mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'SCT_merged_clusters', 'SCT', 'Top marker heatmap - SCT')
+mat_sct <- plot_marker_heatmap('FindMarkersBulk_merged_SCT/Top_markers.csv', 'SCT_merged_clusters', 'RNA', 'Top marker heatmap - SCT')
 ```
 
 Annotate marker heatmaps by labeling transcription factor genes when reference files are available.
