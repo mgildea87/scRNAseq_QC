@@ -252,7 +252,7 @@ resolve_hto_adt <- function(input_path, label, want_hto, want_adt,
   if (want_hto && nzchar(trimws(hto_path))) {
     result$hto <- read_10x_assay_input(
       hto_path, paste0(label, ' HTO'),
-      feature_types = c('Multiplexing Capture', 'Antibody Capture')
+      feature_types = c('Multiplexing Capture', 'Cell Hashing', 'Antibody Capture')
     )
   }
   if (want_adt && nzchar(trimws(adt_path))) {
@@ -267,8 +267,10 @@ resolve_hto_adt <- function(input_path, label, want_hto, want_adt,
   if (still_need_hto || still_need_adt) {
     raw_list <- read_10x_input_list(input_path, label)
     if (still_need_hto) {
-      mux <- extract_feature_type(raw_list, 'Multiplexing Capture', label, input_path)
-      if (!is.null(mux)) result$hto <- mux
+      for (hto_type in c('Multiplexing Capture', 'Cell Hashing')) {
+        mux <- extract_feature_type(raw_list, hto_type, label, input_path)
+        if (!is.null(mux)) { result$hto <- mux; break }
+      }
     }
     ab <- extract_feature_type(raw_list, 'Antibody Capture', label, input_path)
     if (!is.null(ab) && ((still_need_hto && is.null(result$hto)) || still_need_adt)) {

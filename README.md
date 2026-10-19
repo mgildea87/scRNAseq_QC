@@ -203,7 +203,7 @@ reference names or HTO names are errors; `id` and `feature_type` are not used
 to classify antibody features.
 
 When HTO counts are in a separate named matrix within the filtered input,
-`Multiplexing Capture` is recognized automatically (case-insensitively). For
+`Multiplexing Capture` or `Cell Hashing` is recognized automatically (case-insensitively). For
 HTO and ADT rows combined in `Antibody Capture`, set `hto_features` to the
 exact HTO names from the feature reference's `name` column; remaining
 reference names are treated as ADT. Other feature-type names (for example,
