@@ -125,7 +125,7 @@ row must exactly match the corresponding sample column header.
 | `min_malat1` | No | Minimum normalised MALAT1 expression (default 1) |
 | `use_hashtag` | No | `TRUE` enables HTO loading and demultiplexing for this sample (default `FALSE`) |
 | `use_adt` | No | `TRUE` enables ADT loading and DSB normalization for this sample (default `FALSE`) |
-| `feature_reference_path` | Required when HTO or ADT enabled with "name" column specifying feature names | CellRanger `feature_reference.csv`; required even when separate HTO/ADT paths are provided |
+| `feature_reference_path` | Required when ADT enabled, with "name" column specifying feature names | CellRanger `feature_reference.csv`; required for ADT even when separate ADT paths are provided; not needed for HTO-only runs |
 | `hto_path` | No | Direct path to a separate filtered HTO matrix (10x MEX directory or `.h5`); takes priority over matrix splitting |
 | `adt_path` | No | Direct path to a separate filtered ADT matrix; takes priority over matrix splitting |
 | `raw_adt_path` | No | Optional direct path override for the raw ADT matrix used for DSB empty-droplet background; if blank, ADT is resolved from the `Antibody Capture` matrix in `raw_path`; barcodes must match filtered ADT |
@@ -194,9 +194,10 @@ HTO and ADT data usually arrive as one CellRanger `multi`/feature-barcoded
 `filtered_feature_bc_matrix` / `raw_feature_bc_matrix`, where `Read10X()`
 returns a named list keyed by feature type (`Gene Expression`, `Antibody
 Capture`, sometimes `Multiplexing Capture`). HTO and ADT features are
-frequently combined inside one `Antibody Capture` matrix. When either feature
-is enabled, `feature_reference_path` is required and loaded before matrix
-resolution. For a combined matrix, the reference's `name` column is
+frequently combined inside one `Antibody Capture` matrix. When ADT is
+enabled, `feature_reference_path` is required and loaded before matrix
+resolution; HTO-only runs identify HTOs from `hto_features` alone and do not
+need it. For a combined matrix, the reference's `name` column is
 canonical and must match matrix feature rownames: `hto_features` lists exact
 HTO names, and all remaining reference names are treated as ADT. Missing
 reference names or HTO names are errors; `id` and `feature_type` are not used
@@ -218,8 +219,8 @@ left blank to resolve ADT from an `Antibody Capture` matrix in the raw input
 using the same feature-reference rules, or set to a direct raw ADT matrix path
 to override resolution.
 Filtered and raw ADT barcodes must match for DSB. The `feature_reference_path`
-is still required when HTO or ADT processing is enabled, including when
-separate paths are used.
+is still required when ADT processing is enabled, including when separate
+paths are used.
 
 ### Hashtag (HTO) demultiplexing
 

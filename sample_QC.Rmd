@@ -326,12 +326,12 @@ describe_loaded_files <- function(input_path) {
 }
 
 feature_reference_names <- NULL
-if (isTRUE(params$use_hashtag) || isTRUE(params$use_adt)) {
+if (isTRUE(params$use_adt)) {
   if (is.na(params$feature_reference_path) ||
       !nzchar(trimws(params$feature_reference_path)) ||
       !file.exists(params$feature_reference_path)) {
     stop(
-      'feature_reference_path must point to an existing feature_reference.csv when use_hashtag or use_adt is TRUE for sample ',
+      'feature_reference_path must point to an existing feature_reference.csv when use_adt is TRUE for sample ',
       params$sample_name, '.',
       call. = FALSE
     )

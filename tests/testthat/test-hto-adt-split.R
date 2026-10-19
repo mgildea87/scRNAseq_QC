@@ -16,6 +16,16 @@ testthat::test_that("antibody features split by canonical feature-reference name
   testthat::expect_equal(sum(split$adt), sum(antibody_matrix[c("CD3", "CD4"), ]))
 })
 
+testthat::test_that("HTO-only split needs no feature reference", {
+  test_matrix <- matrix(1:6, nrow = 3,
+                        dimnames = list(c("HTO_A", "HTO_B", "CD3"), c("cellA", "cellB")))
+  split <- split_antibody_capture(test_matrix, NULL, "HTO_A;HTO_B")
+  testthat::expect_identical(rownames(split$hto), c("HTO_A", "HTO_B"))
+  testthat::expect_null(split$adt)
+  testthat::expect_error(split_antibody_capture(test_matrix, NULL, "HTO_X"), "missing from Antibody Capture")
+  testthat::expect_error(split_antibody_capture(test_matrix, NULL, ""), "hto_features must be set")
+})
+
 testthat::test_that("invalid feature-reference and HTO names fail clearly", {
   test_matrix <- matrix(1:3, nrow = 3,
                         dimnames = list(c("HTO_A", "CD3", "CD4"), "cellA"))

@@ -85,14 +85,28 @@ split_antibody_capture <- function(ab_matrix, feature_names, hto_features) {
     stop("Antibody Capture matrix must have feature row names.", call. = FALSE)
   }
 
+  explicit_hto_names <- trimws(strsplit(as.character(hto_features), "[;,]")[[1L]])
+  explicit_hto_names <- unique(explicit_hto_names[nzchar(explicit_hto_names)])
+
+  # Without a feature reference (HTO-only runs), HTOs come from hto_features alone.
+  if (is.null(feature_names)) {
+    if (length(explicit_hto_names) == 0L) {
+      stop("hto_features must be set when no feature reference is provided.", call. = FALSE)
+    }
+    missing_hto_rows <- setdiff(explicit_hto_names, rownames(ab_matrix))
+    if (length(missing_hto_rows) > 0L) {
+      stop("HTO feature names missing from Antibody Capture matrix: ",
+           paste(missing_hto_rows, collapse = ", "), call. = FALSE)
+    }
+    return(list(hto = ab_matrix[explicit_hto_names, , drop = FALSE], adt = NULL))
+  }
+
   missing_matrix_names <- setdiff(feature_names, rownames(ab_matrix))
   if (length(missing_matrix_names) > 0L) {
     stop("Feature reference names missing from Antibody Capture matrix: ",
          paste(missing_matrix_names, collapse = ", "), call. = FALSE)
   }
 
-  explicit_hto_names <- trimws(strsplit(as.character(hto_features), "[;,]")[[1L]])
-  explicit_hto_names <- unique(explicit_hto_names[nzchar(explicit_hto_names)])
   missing_hto_names <- setdiff(explicit_hto_names, feature_names)
   if (length(missing_hto_names) > 0L) {
     stop("HTO feature names not found in feature reference: ",
