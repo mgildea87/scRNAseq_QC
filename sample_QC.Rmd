@@ -835,16 +835,18 @@ seurat$replicate_id <- paste(params$sample_name, seurat$hash.ID, sep = '_')
 
 cat('HTO classification counts:\n')
 print(table(seurat$HTO_class))
+
+hash_number <- length(unique(seurat$hash.ID))*0.5
 ```
 
-```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag), fig.height=10, fig.width=18}
+```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag), fig.height=10*hash_number, fig.width=18}
 HTOHeatmap(seurat, assay = 'HTO')
 RidgePlot(seurat, assay = 'HTO', features = rownames(seurat[['HTO']]), ncol = 2)
 ```
 
 ```{r hto-qc-plots2, eval=isTRUE(params$use_hashtag), fig.height=8, fig.width=10}
 # Per-HTO CLR density plots show assigned cells against all other cells.
-VlnPlot(seurat, features = 'nCount_RNA', group.by = 'HTO_class', log = TRUE, pt.size = 0.1)
+VlnPlot(seurat, features = 'nCount_RNA', group.by = 'HTO_class', log = TRUE, pt.size = 0)
 hto_data <- GetAssayData(seurat, assay = 'HTO', layer = 'data')
 hto_thresholds <- hto_singlet_expression_thresholds(
   hto_data,
@@ -910,13 +912,61 @@ if (!requireNamespace('scDblFinder', quietly = TRUE) || !requireNamespace('scate
 
   hto_sce <- as.SingleCellExperiment(hto_check)
   hto_dimreds <- resolve_hto_doublet_dimreds(SingleCellExperiment::reducedDimNames(hto_sce))
+  
+  known_doublets <- hto_sce$HTO_class == "Doublet"
+  is_singlet <- hto_sce$HTO_class == "Singlet"
+  sample_sizes <- table(
+    as.character(hto_sce$hash.ID[is_singlet])
+  )
+  
+  p <- as.numeric(sample_sizes) / sum(sample_sizes)
+
+  # Per-hashtag proportions and contributions to same-hashtag probability.
+  hashtag_summary <- data.frame(
+    hashtag = names(sample_sizes),
+    singlet_cells = as.integer(sample_sizes),
+    proportion = p,
+    percent = 100 * p,
+    same_hash_contribution = p^2
+  )
+
+  print(hashtag_summary, row.names = FALSE)
+
+  # Probabilities under random two-cell pairing.
+  p_same <- sum(p^2)
+  p_cross <- 1 - p_same
+
+  # Estimate hidden same-hashtag doublets from observed cross-hashtag doublets.
+  n_hto_doublets <- sum(hto_sce$HTO_class %in% "Doublet")
+  n_hto_singlets <- sum(sample_sizes)
+
+  estimated_same_hash_doublets <- n_hto_doublets * p_same / p_cross
+  estimated_residual_fraction <- estimated_same_hash_doublets / n_hto_singlets
+
+  cat(sprintf(
+    paste0(
+      "\nHTO singlets: %s\n",
+      "HTO doublets: %s\n",
+      "P(same hashtag | two-cell doublet): %.4f (%.2f%%)\n",
+      "P(cross hashtag | two-cell doublet): %.4f (%.2f%%)\n",
+      "Estimated hidden same-hashtag doublets: %.0f\n",
+      "Estimated doublet fraction among HTO singlets: %.2f%%\n"
+    ),
+    n_hto_singlets,
+    n_hto_doublets,
+    p_same, 100 * p_same,
+    p_cross, 100 * p_cross,
+    estimated_same_hash_doublets,
+    100 * estimated_residual_fraction
+  ))
+  
   doublets_pred <- scDblFinder::recoverDoublets(
     hto_sce,
     use.dimred = hto_dimreds$pca,
-    doublets = (hto_sce$HTO_class == 'Doublet'),
-    samples = table(hto_sce$hash.ID)
+    doublets = known_doublets,
+    samples = sample_sizes
   )
-  hto_sce$predicted_intra_sample_doublet <- doublets_pred$predicted
+  hto_sce$predicted_intra_sample_doublet <- doublets_pred$predicted & is_singlet
 
   seurat$predicted_intra_sample_doublet <- FALSE
   seurat$predicted_intra_sample_doublet[colnames(hto_sce)] <- hto_sce$predicted_intra_sample_doublet
@@ -2208,7 +2258,7 @@ if (nrow(adt_mat) > 1 && ncol(adt_mat) > 1) {
 ```
 
 # Doublet detection
-Doublets are annotated but **not removed** here; reassess after integration/merging. Doublets per RNA (log-normalized) clusters are shown below.
+Doublets are annotated but **not removed** here; reassess after integration/merging. Overall doublet frequencies and frequencies per RNA (log-normalized) cluster are shown below.
 
 ```{r doublet-detection}
 # Run scDblFinder twice (with RNA cluster labels and with clusters = NULL), then
@@ -2237,6 +2287,32 @@ cat('Clustered run (clusters = RNA_sample_clusters):\n')
 print(table(seurat$RNA_sample_clusters, seurat$doublet_class_clustered))
 cat('\nUnclustered run (clusters = NULL):\n')
 print(table(seurat$RNA_sample_clusters, seurat$doublet_class_unclustered))
+
+doublet_classes <- list(
+  Clustered = seurat$doublet_class_clustered,
+  Unclustered = seurat$doublet_class_unclustered
+)
+overall_doublet_frequency <- data.frame(
+  run = names(doublet_classes),
+  doublets = vapply(doublet_classes, function(x) sum(x == 'doublet', na.rm = TRUE), integer(1)),
+  total_cells = vapply(doublet_classes, function(x) sum(!is.na(x)), integer(1))
+)
+overall_doublet_frequency$frequency_percent <- with(
+  overall_doublet_frequency,
+  ifelse(total_cells > 0, 100 * doublets / total_cells, NA_real_)
+)
+cat(sprintf(
+  '\nClustered run overall doublet frequency: %.2f%% (%d/%d cells)\n',
+  overall_doublet_frequency$frequency_percent[1],
+  overall_doublet_frequency$doublets[1],
+  overall_doublet_frequency$total_cells[1]
+))
+cat(sprintf(
+  'Unclustered run overall doublet frequency: %.2f%% (%d/%d cells)\n',
+  overall_doublet_frequency$frequency_percent[2],
+  overall_doublet_frequency$doublets[2],
+  overall_doublet_frequency$total_cells[2]
+))
 
 Idents(seurat) <- 'doublet_class_clustered'
 DimPlot(seurat, reduction = 'UMAP_RNA_sample') +
@@ -2306,4 +2382,3 @@ ggplot(prop.doublets.unclustered, aes(x = Var1, y = Freq, fill = Var2)) +
   ylab('Fraction doublet class') +
   ggtitle('Doublet fraction by cluster (unclustered scDblFinder)')
 ```
-
