@@ -18,6 +18,7 @@
 # Each path should point directly to a 10x MEX directory or a 10x .h5/.hdf5 file.
 #
 # Optional per-sample hashtag (HTO) / CITE-seq (ADT) fields: use_hashtag,
+# hto_method (HTODemux [default] or hashedDrops),
 # use_adt, feature_reference_path, hto_path, adt_path, raw_adt_path,
 # hto_features,
 # min_nCount_ADT, max_nCount_ADT, dsb_background_rna_max,
@@ -42,6 +43,8 @@
 #   --integration_level Integration grouping level: Batch or Sample (default: Sample)
 #   --use_cellbender If TRUE, prefer/require cellbender_filtered.h5 for
 #                   filtered input resolution (default: FALSE)
+#   --hto_method    HTODemux or hashedDrops; default hashtag demultiplexing method
+#                   (a non-blank hto_method sample-sheet row overrides it) (default: HTODemux)
 # ─────────────────────────────────────────────────────────────────────────────
 
 suppressPackageStartupMessages({
@@ -68,6 +71,7 @@ print_usage_and_exit <- function(status = 0L) {
     "  --integration_only <TRUE/FALSE> Run only integration from existing merged_QC.rds [default: FALSE]\n",
     "  --integration_level <Batch|Sample> Integration grouping level [default: Sample]\n",
     "  --use_cellbender <TRUE/FALSE> Use cellbender_filtered.h5 as filtered input [default: FALSE]\n",
+    "  --hto_method <HTODemux|hashedDrops> Hashtag demultiplexing method; sample-sheet hto_method row overrides [default: HTODemux]\n",
     "  --help                  Show this help message\n",
     sep = ""
   )
@@ -88,7 +92,8 @@ parse_cli_args <- function(args) {
     skip_merge = "FALSE",
     run_integration = "FALSE",
     integration_only = "FALSE",
-    use_cellbender = "FALSE"
+    use_cellbender = "FALSE",
+    hto_method = "HTODemux"
   )
 
   if (length(args) == 0L) return(defaults)
@@ -135,6 +140,13 @@ parse_cli_args <- function(args) {
   defaults$integration_only <- parse_logical_flag(defaults$integration_only, "--integration_only")
   defaults$use_cellbender <- parse_logical_flag(defaults$use_cellbender, "--use_cellbender")
 
+  canon_hto <- c(htodemux = "HTODemux", hasheddrops = "hashedDrops")
+  hto_key <- tolower(trimws(as.character(defaults$hto_method)))
+  if (!hto_key %in% names(canon_hto)) {
+    stop("--hto_method must be HTODemux or hashedDrops.", call. = FALSE)
+  }
+  defaults$hto_method <- unname(canon_hto[hto_key])
+
   if (isTRUE(defaults$integration_only)) {
     defaults$run_integration <- TRUE
   }
@@ -165,6 +177,7 @@ message("  output_dir      : ", opt$output_dir)
 message("  sample_name     : ", if (is.null(opt$sample_name)) "<all>" else opt$sample_name)
 message("  ncores          : ", opt$ncores)
 message("  use_cellbender  : ", opt$use_cellbender)
+message("  hto_method      : ", opt$hto_method)
 message("  skip_merge      : ", opt$skip_merge)
 message("  run_integration : ", opt$run_integration)
 message("  integration_only: ", opt$integration_only)
@@ -552,6 +565,19 @@ if (!"use_hashtag" %in% colnames(samples)) {
   samples$use_hashtag <- suppressWarnings(as.logical(samples$use_hashtag))
   samples$use_hashtag[is.na(samples$use_hashtag)] <- FALSE
 }
+if (!"hto_method" %in% colnames(samples)) {
+  samples$hto_method <- opt$hto_method
+} else {
+  hm <- trimws(as.character(samples$hto_method))
+  hm[is.na(hm) | !nzchar(hm)] <- opt$hto_method
+  canon <- c(htodemux = "HTODemux", hasheddrops = "hashedDrops")
+  bad <- !tolower(hm) %in% names(canon)
+  if (any(bad)) {
+    stop("hto_method must be 'HTODemux' or 'hashedDrops'; got: ",
+         paste(unique(hm[bad]), collapse = ", "), call. = FALSE)
+  }
+  samples$hto_method <- unname(canon[tolower(hm)])
+}
 if (!"use_adt" %in% colnames(samples)) {
   samples$use_adt <- FALSE
 } else {
@@ -627,6 +653,7 @@ render_sample <- function(row) {
         min_nCount_ADT   = suppressWarnings(as.numeric(row[["min_nCount_ADT"]])),
         max_nCount_ADT   = suppressWarnings(as.numeric(row[["max_nCount_ADT"]])),
         use_hashtag      = isTRUE(row[["use_hashtag"]]),
+        hto_method       = row[["hto_method"]],
         use_adt          = isTRUE(row[["use_adt"]]),
         feature_reference_path = row[["feature_reference_path"]],
         hto_path         = row[["hto_path"]],

@@ -32,6 +32,8 @@ params:
   # Hashtag (HTO) demultiplexing and CITE-seq (ADT) options. Leave use_hashtag /
   # use_adt FALSE to skip these sections entirely (default, matches prior behavior).
   use_hashtag:            FALSE
+  # Demultiplexing method when use_hashtag is TRUE: "HTODemux" (default) or "hashedDrops".
+  hto_method:             "HTODemux"
   use_adt:                FALSE
   feature_reference_path: ""
   hto_path:               ""
@@ -105,6 +107,7 @@ param_lines <- c(
   sprintf('[%s] PARAM min_nCount_ADT=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nCount_ADT)),
   sprintf('[%s] PARAM max_nCount_ADT=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nCount_ADT)),
   sprintf('[%s] PARAM use_hashtag=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$use_hashtag)),
+  sprintf('[%s] PARAM hto_method=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$hto_method)),
   sprintf('[%s] PARAM use_adt=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$use_adt)),
   sprintf('[%s] PARAM feature_reference_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$feature_reference_path)),
   sprintf('[%s] PARAM hto_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$hto_path)),
@@ -166,7 +169,7 @@ library(knitr)
 library(Seurat)
 library(scDblFinder)
 library(presto)
-
+library(DropletUtils)
 
 ```
 
@@ -813,18 +816,22 @@ if (!is.null(hto_matrix_filtered) || !is.null(adt_matrix_filtered)) {
 ```
 
 ```{r hto-section-header, results='asis', echo=FALSE}
+hto_method <- if (is.null(params$hto_method) || is.na(params$hto_method) || !nzchar(params$hto_method)) 'HTODemux' else as.character(params$hto_method)
+if (isTRUE(params$use_hashtag) && !hto_method %in% c('HTODemux', 'hashedDrops')) {
+  stop("hto_method must be 'HTODemux' or 'hashedDrops'; got: ", hto_method, call. = FALSE)
+}
 if (isTRUE(params$use_hashtag)) {
   cat(
     '# Hashtag demultiplexing\n\n',
     'Demultiplexes pooled hashtagged cells into per-cell sample identity using ',
-    '`HTODemux`, with diagnostic plots and an intra-sample doublet check via ',
+    '`', hto_method, '`, with diagnostic plots and an intra-sample doublet check via ',
     '`scDblFinder::recoverDoublets`.\n\n',
     sep = ''
   )
 }
 ```
 
-```{r htodemux, eval=isTRUE(params$use_hashtag)}
+```{r htodemux, eval=isTRUE(params$use_hashtag) && hto_method == 'HTODemux'}
 # HTODemux requires CLR-normalized HTO counts (independent of ADT's DSB choice).
 seurat <- NormalizeData(seurat, assay = 'HTO', normalization.method = 'CLR', margin = 2)
 seurat <- HTODemux(seurat, assay = 'HTO', positive.quantile = 0.99)
@@ -839,15 +846,55 @@ print(table(seurat$HTO_class))
 hash_number <- length(unique(seurat$hash.ID))*0.5
 ```
 
-```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag), fig.height=8, fig.width=10}
+```{r htohasheddrops, eval=isTRUE(params$use_hashtag) && hto_method == 'hashedDrops', fig.height=5, fig.width=7}
+hto.mat <- seurat[["HTO"]]$counts
+hash.stats <- hashedDrops(hto.mat)
+hist(hash.stats$LogFC, xlab="Log fold-change from best to second HTO", main="")
+table(hash.stats$Best[hash.stats$Confident])
+
+plot_data <- as.data.frame(S4Vectors::metadata(hash.stats)$ambient)
+colnames(plot_data) <- 'ambient_counts'
+plot_data$hashtag <- row.names(plot_data)
+ggplot(plot_data, aes(y = hashtag, x = ambient_counts))+
+  geom_bar(stat = 'identity', fill = 'salmon')+
+  theme_minimal()+
+  xlab("Inferred proportion of counts in the ambient solution")
+
+hash.stats$hash.ID <- rep('', nrow(hash.stats))
+for(i in 1:nrow(hto.mat)){
+  hash.stats$hash.ID[which(hash.stats$Best == i)] <- row.names(hto.mat)[i]
+}
+hash.stats$hash.ID[which(hash.stats$Doublet == TRUE)] <- 'Doublet'
+hash.stats$hash.ID[which(hash.stats$Confident == FALSE & hash.stats$Doublet == FALSE)] <- 'Negative'
+
+hash.stats$HTO_class <- hash.stats$hash.ID
+hash.stats$HTO_class[which(hash.stats$hash.ID != 'Negative' & hash.stats$hash.ID != 'Doublet')] <- 'Singlet'
+
+seurat$HTO_class <- hash.stats$HTO_class
+seurat$hash.ID <- hash.stats$hash.ID
+
+# Downstream density plots use CLR-normalized HTO data.
+seurat <- NormalizeData(seurat, assay = 'HTO', normalization.method = 'CLR', margin = 2)
+seurat$HTO_sample   <- seurat$hash.ID
+seurat$replicate_id <- paste(params$sample_name, seurat$hash.ID, sep = '_')
+
+cat('HTO classification counts:\n')
+print(table(seurat$HTO_class))
+
+hash_number <- length(unique(seurat$hash.ID))*0.5
+```
+
+```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag) && hto_method == 'HTODemux', fig.height=8, fig.width=10}
 HTOHeatmap(seurat, assay = 'HTO')
 ```
 
-```{r hto-qc-plots2, eval=isTRUE(params$use_hashtag), fig.height=10*hash_number, fig.width=18}
+```{r hto-qc-plots2, eval=isTRUE(params$use_hashtag) && hto_method == 'HTODemux', fig.height=10*hash_number, fig.width=18}
 RidgePlot(seurat, assay = 'HTO', features = rownames(seurat[['HTO']]), ncol = 2)
 ```
 
-```{r hto-qc-plots2, eval=isTRUE(params$use_hashtag), fig.height=8, fig.width=10}
+
+
+```{r hto-qc-plots3, eval=isTRUE(params$use_hashtag), fig.height=8, fig.width=10}
 # Per-HTO CLR density plots show assigned cells against all other cells.
 VlnPlot(seurat, features = 'nCount_RNA', group.by = 'HTO_class', log = TRUE, pt.size = 0)
 hto_data <- GetAssayData(seurat, assay = 'HTO', layer = 'data')
@@ -897,8 +944,18 @@ seurat <- subset(seurat, subset = HTO_class != 'Negative')
 cat('Removed', n_before_neg - ncol(seurat), 'HTO Negative cells;', ncol(seurat), 'remain (Singlet + Doublet).\n')
 ```
 
+```{r hto-subsection-header, results='asis', echo=FALSE}
+if (isTRUE(params$use_hashtag)) {
+  cat(
+    '## Detect and remove intra sample doublets\n\n',
+    'This section identifies and removes intra-sample doublets using scDblFinder using known doublets from hash-tag demultiplexing as a reference.\n\n',
+    sep = ''
+  )
+}
+```
+
 ```{r hto-intra-sample-doublets, eval=isTRUE(params$use_hashtag), fig.height=5, fig.width=12}
-# Intra-sample doublets: same-hashtag doublets HTODemux can't catch, detected
+# Intra-sample doublets: same-hashtag doublets hashtag demultiplexing can't catch, detected
 # via scDblFinder::recoverDoublets on an RNA PCA/UMAP restricted to this subset.
 if (!requireNamespace('scDblFinder', quietly = TRUE) || !requireNamespace('scater', quietly = TRUE) ||
     !requireNamespace('gridExtra', quietly = TRUE)) {
@@ -987,8 +1044,16 @@ if (!requireNamespace('scDblFinder', quietly = TRUE) || !requireNamespace('scate
 ```{r hto-filter-singlets, eval=isTRUE(params$use_hashtag)}
 n_before <- ncol(seurat)
 keep_singlets <- hto_singlet_keep_mask(seurat$HTO_class)
-seurat <- subset(seurat, cells = colnames(seurat)[keep_singlets])
-cat('Kept', ncol(seurat), 'of', n_before, 'cells classified as HTO Singlet (removed known HTO Doublets).\n')
+predicted_doublets <- seurat$predicted_intra_sample_doublet %in% TRUE
+keep_cells <- keep_singlets & !predicted_doublets
+
+n_known_doublets <- sum(seurat$HTO_class %in% 'Doublet')
+n_predicted_doublets <- sum(keep_singlets & predicted_doublets)
+seurat <- subset(seurat, cells = colnames(seurat)[keep_cells])
+cat('Cells before filtering:', n_before, '\n')
+cat('Known HTO doublets removed:', n_known_doublets, '\n')
+cat('Predicted intra-sample doublets removed:', n_predicted_doublets, '\n')
+cat('HTO singlets retained:', ncol(seurat), '\n')
 ```
 
 # Cell and gene count prior to filtering

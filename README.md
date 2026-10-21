@@ -124,6 +124,7 @@ row must exactly match the corresponding sample column header.
 | `max_percent_rbc` | No | Upper haemoglobin-gene percentage bound; `NA` applies no cap |
 | `min_malat1` | No | Minimum normalised MALAT1 expression (default 1) |
 | `use_hashtag` | No | `TRUE` enables HTO loading and demultiplexing for this sample (default `FALSE`) |
+| `hto_method` | No | HTO demultiplexing method when `use_hashtag` is TRUE: `HTODemux` (default) or `hashedDrops` (DropletUtils) |
 | `use_adt` | No | `TRUE` enables ADT loading and DSB normalization for this sample (default `FALSE`) |
 | `feature_reference_path` | Required when ADT enabled, with "name" column specifying feature names | CellRanger `feature_reference.csv`; required for ADT even when separate ADT paths are provided; not needed for HTO-only runs |
 | `hto_path` | No | Direct path to a separate filtered HTO matrix (10x MEX directory or `.h5`); takes priority over matrix splitting |
@@ -420,6 +421,7 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 |------|---------|-------------|
 | `--sample_sheet` | *(required)* | Absolute path to CSV sample sheet |
 | `--output_dir` | `QC` | Directory for HTML reports, RDS files, and logs |
+| `--hto_method` | `HTODemux` | Hashtag demultiplexing method (`HTODemux` or `hashedDrops`); a non-blank `hto_method` sample-sheet row overrides it |
 | `--use_cellbender` | `FALSE` | If `TRUE`, filtered input must resolve to `cellbender_filtered.h5` (or `.hdf5`) |
 | `--mem` | `32` | Memory per job in GB |
 | `--merge_mem` | `64` | Memory for the merge job in GB |
