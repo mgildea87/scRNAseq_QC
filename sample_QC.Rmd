@@ -839,8 +839,11 @@ print(table(seurat$HTO_class))
 hash_number <- length(unique(seurat$hash.ID))*0.5
 ```
 
-```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag), fig.height=10*hash_number, fig.width=18}
+```{r hto-qc-plots1, eval=isTRUE(params$use_hashtag), fig.height=8, fig.width=10}
 HTOHeatmap(seurat, assay = 'HTO')
+```
+
+```{r hto-qc-plots2, eval=isTRUE(params$use_hashtag), fig.height=10*hash_number, fig.width=18}
 RidgePlot(seurat, assay = 'HTO', features = rownames(seurat[['HTO']]), ncol = 2)
 ```
 
