@@ -2,6 +2,7 @@ field,Control_1,Control_2,Treatment_1,Pool_1
 sample_name,Control_1,Control_2,Treatment_1,Pool_1
 filtered_path,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-1/outs/filtered_feature_bc_matrix,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-2/outs/filtered_feature_bc_matrix,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-3/outs/filtered_feature_bc_matrix,/path/to/count-Pool-1/outs/filtered_feature_bc_matrix
 raw_path,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-1/outs/raw_feature_bc_matrix,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-2/outs/raw_feature_bc_matrix,/gpfs/data/sequence/results/giannarellilab/2026-03-12/cellranger/count-Library-3/outs/raw_feature_bc_matrix,/path/to/count-Pool-1/outs/raw_feature_bc_matrix
+soupx_contamination,NA,NA,NA,NA
 batch,A,B,A,A
 min_nCount_RNA,NA,NA,500,NA
 max_nCount_RNA,NA,NA,25000,NA

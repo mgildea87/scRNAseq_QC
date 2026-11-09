@@ -72,13 +72,13 @@ make_synthetic_10x_fixture <- function() {
 write_transposed_sample_sheet <- function(path, sample_names = c("A", "B")) {
   sheet <- data.frame(
     field = c("sample_name", "filtered_path", "raw_path", "batch",
-              "min_nCount_RNA", "use_hashtag"),
+              "min_nCount_RNA", "use_hashtag", "soupx_contamination"),
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
   for (sample_name in sample_names) {
     sheet[[sample_name]] <- c(sample_name, paste0("/filtered/", sample_name),
-                              paste0("/raw/", sample_name), "batch1", NA, "FALSE")
+                              paste0("/raw/", sample_name), "batch1", NA, "FALSE", "NA")
   }
   write.csv(sheet, path, row.names = FALSE, na = "NA", quote = TRUE)
 }

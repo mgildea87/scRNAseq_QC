@@ -205,6 +205,76 @@ hto_singlet_expression_thresholds <- function(expression_matrix, hto_class, hash
   thresholds
 }
 
+resolve_soupx_contamination <- function(value = NA_real_) {
+  if (is.null(value) || length(value) == 0L) return(NA_real_)
+  if (length(value) != 1L) {
+    stop("soupx_contamination must be a single number or NA.", call. = FALSE)
+  }
+  if (is.na(value)) return(NA_real_)
+
+  if (is.character(value)) {
+    value <- trimws(value)
+    if (toupper(value) == "NA" || !nzchar(value)) return(NA_real_)
+  }
+
+  contamination <- suppressWarnings(as.numeric(value))
+  if (length(contamination) != 1L ||
+      is.na(contamination) || !is.finite(contamination) ||
+      contamination < 0 || contamination >= 1) {
+    stop("soupx_contamination must be NA or a number in [0, 1).", call. = FALSE)
+  }
+
+  contamination
+}
+
+normalize_sample_soupx_contamination <- function(values, sample_names) {
+  if (length(values) != length(sample_names)) {
+    stop("SoupX contamination values must match the sample-name count.", call. = FALSE)
+  }
+
+  vapply(seq_along(values), function(i) {
+    tryCatch(
+      resolve_soupx_contamination(values[[i]]),
+      error = function(e) {
+        stop(
+          "Invalid soupx_contamination for sample '", sample_names[[i]],
+          "': ", conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+  }, numeric(1L), USE.NAMES = FALSE)
+}
+
+align_soupx_matrices <- function(raw_counts, filtered_counts) {
+  validate_matrix <- function(mat, label) {
+    if (!(inherits(mat, "Matrix") || is.matrix(mat)) ||
+        is.null(rownames(mat)) || is.null(colnames(mat)) ||
+        anyDuplicated(rownames(mat)) || anyDuplicated(colnames(mat))) {
+      stop("SoupX ", label, " counts must be a matrix with unique feature and barcode names.",
+           call. = FALSE)
+    }
+  }
+  validate_matrix(raw_counts, "raw")
+  validate_matrix(filtered_counts, "filtered")
+
+  common_features <- intersect(rownames(filtered_counts), rownames(raw_counts))
+  missing_barcodes <- setdiff(colnames(filtered_counts), colnames(raw_counts))
+  if (length(common_features) == 0L || length(missing_barcodes) > 0L) {
+    stop(
+      "SoupX requires shared genes and all filtered barcodes in the raw matrix; ",
+      length(common_features), " shared genes and ", length(missing_barcodes),
+      " filtered barcodes missing from raw input.",
+      call. = FALSE
+    )
+  }
+
+  list(
+    tod = raw_counts[common_features, , drop = FALSE],
+    toc = filtered_counts[common_features, , drop = FALSE]
+  )
+}
+
 load_transposed_sample_sheet <- function(path,
                                          required_fields = c("sample_name", "filtered_path", "raw_path")) {
   sheet <- read.csv(

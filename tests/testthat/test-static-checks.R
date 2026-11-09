@@ -31,6 +31,16 @@ testthat::test_that("R scripts and R Markdown parse", {
   testthat::expect_no_match(template_text, "parse_hto_demux_thresholds", fixed = TRUE)
   testthat::expect_no_match(template_text, "params$hto_positive_quantile", fixed = TRUE)
   testthat::expect_no_match(template_text, "params$hto_filter_doublets_negatives", fixed = TRUE)
+  testthat::expect_match(template_text, "use_soupx:        FALSE", fixed = TRUE)
+  testthat::expect_match(template_text, "PARAM soupx_contamination", fixed = TRUE)
+  testthat::expect_match(template_text, "SoupX::autoEstCont", fixed = TRUE)
+  testthat::expect_match(template_text, "SoupX::adjustCounts(soup_channel, roundToInt = TRUE, verbose = 0)", fixed = TRUE)
+  testthat::expect_match(template_text, "seurat <- corrected_counts", fixed = TRUE)
+  testthat::expect_match(template_text, "SoupX and CellBender cannot both be enabled", fixed = TRUE)
+  testthat::expect_lt(
+    regexpr("```\\{r soupx-ambient-rna", template_text),
+    regexpr("```\\{r filter-lowly-detected-genes", template_text)
+  )
 })
 
 testthat::test_that("recoverDoublets is exported by scDblFinder", {
@@ -94,6 +104,42 @@ testthat::test_that("integration level defaults to Sample and accepts Batch", {
   ))
   testthat::expect_identical(default_options$integration_level, "Sample")
   testthat::expect_identical(batch_options$integration_level, "Batch")
+})
+
+testthat::test_that("SoupX runner option defaults off and rejects CellBender", {
+  runner_expressions <- parse(file.path(repo_root, "qc_batch_runner.R"))
+  parser_assignment <- Filter(function(expression) {
+    is.call(expression) && identical(expression[[1L]], as.name("<-")) &&
+      identical(expression[[2L]], as.name("parse_cli_args"))
+  }, runner_expressions)[[1L]]
+  parser_environment <- new.env(parent = globalenv())
+  eval(parser_assignment, envir = parser_environment)
+
+  default_options <- parser_environment$parse_cli_args(character())
+  testthat::expect_false(default_options$use_soupx)
+  testthat::expect_true(
+    "soupx_contamination" %in% names(load_transposed_sample_sheet(
+      file.path(repo_root, "samples.csv")
+    ))
+  )
+  testthat::expect_error(
+    parser_environment$parse_cli_args(c(
+      "--sample_sheet", "samples.csv", "--use_cellbender", "TRUE", "--use_soupx", "TRUE"
+    )),
+    "cannot be used together"
+  )
+})
+
+testthat::test_that("runner and SLURM submitter forward SoupX options", {
+  runner_text <- paste(readLines(file.path(repo_root, "qc_batch_runner.R"), warn = FALSE),
+                       collapse = "\n")
+  submitter_text <- paste(readLines(file.path(repo_root, "submit_QC_batch.sh"), warn = FALSE),
+                          collapse = "\n")
+  testthat::expect_match(runner_text, "use_soupx        = isTRUE(opt$use_soupx)", fixed = TRUE)
+  testthat::expect_match(runner_text, 'soupx_contamination = row[["soupx_contamination"]]', fixed = TRUE)
+  testthat::expect_match(runner_text, "normalize_sample_soupx_contamination", fixed = TRUE)
+  testthat::expect_match(submitter_text, "--use_soupx", fixed = TRUE)
+  testthat::expect_no_match(submitter_text, "--soupx_contamination", fixed = TRUE)
 })
 
 testthat::test_that("shell launchers parse without submitting jobs", {

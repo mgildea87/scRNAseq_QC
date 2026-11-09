@@ -86,6 +86,9 @@ BiocManager::install("bluster")
 # For optional hashtag (HTO) demultiplexing / CITE-seq (ADT) support
 install.packages(c("dsb", "gridExtra"))
 
+# For optional ambient RNA removal
+install.packages("SoupX")
+
 # From GitHub / internal
 remotes::install_github("immunogenomics/presto")
 # CVRCFunc — install from internal source as needed
@@ -117,6 +120,7 @@ row must exactly match the corresponding sample column header.
 | `sample_name` | Yes | Must match the sample column header; used for output filenames |
 | `filtered_path` | Yes | Path to the filtered matrix directory or `.h5` file for that sample |
 | `raw_path` | Yes | Path to the raw matrix directory or `.h5` file for that sample |
+| `soupx_contamination` | No | Per-sample SoupX rho; `NA` or blank estimates rho automatically, otherwise supply a number in `[0, 1)` |
 | `batch` | No | Batch label in Seurat metadata (defaults to `A` if omitted or blank) |
 | `min_nCount_RNA` / `max_nCount_RNA` | No | Lower/upper RNA UMI bounds; `NA` uses MAD minimum or no upper cap |
 | `min_nFeature_RNA` / `max_nFeature_RNA` | No | Lower/upper detected-gene bounds; `NA` uses MAD minimum or no upper cap |
@@ -150,6 +154,7 @@ field,Control_1,Treatment_1
 sample_name,Control_1,Treatment_1
 filtered_path,/path/to/Control/filtered_feature_bc_matrix,/path/to/Treatment/filtered_feature_bc_matrix
 raw_path,/path/to/Control/raw_feature_bc_matrix,/path/to/Treatment/raw_feature_bc_matrix
+soupx_contamination,NA,0.12
 batch,A,A
 min_nCount_RNA,NA,500
 max_nCount_RNA,NA,25000
@@ -165,8 +170,11 @@ max_nCount_ADT,NA,NA
 ```
 
 `Control_1` uses automatic MAD thresholds. `Treatment_1` uses explicit RNA
-thresholds. In spreadsheet software, add a sample by adding a new column and
-filling in its field values.
+thresholds and a manual SoupX contamination fraction (`0.12`). The blank
+SoupX setting (`NA`) uses automatic rho estimation. Set `use_soupx` using the
+global `--use_soupx TRUE` option; rho remains sample-specific in this sheet.
+In spreadsheet software, add a sample by adding a new column and filling in
+its field values.
 
 For `.h5` inputs, `filtered_path` and `raw_path` must point to the file itself, not the folder that contains it. For 10x MEX inputs, the path must point to the matrix directory that contains `matrix.mtx(.gz)`, `barcodes.tsv(.gz)`, and `features.tsv(.gz)` or `genes.tsv(.gz)`.
 
@@ -179,6 +187,26 @@ Supported input formats:
 
 For `.h5` inputs, the QC template currently expects one scRNA matrix per file.
 CellBender filtered input is opt-in via `--use_cellbender TRUE`.
+
+---
+
+## Ambient RNA correction (SoupX)
+
+SoupX is optional and disabled by default to preserve the existing QC workflow.
+Enable it with `--use_soupx TRUE` to build a SoupChannel from the raw RNA matrix
+(`raw_path`) and filtered RNA counts. The sample QC report clusters filtered
+cells, estimates the contamination fraction automatically, corrects the RNA
+counts before the 0.1% gene filter, and plots the estimated rho, soup profile,
+and before/after UMI changes. HTO and ADT counts are not altered.
+
+Set the optional `soupx_contamination` row in `samples.csv` independently for
+each sample: `NA` or blank estimates rho with `autoEstCont`, while a numeric
+value in `[0, 1)` supplies manual rho. The `SoupX` R package must be installed
+when the feature is enabled. SoupX and CellBender are
+mutually exclusive: enabling both flags is an error. When SoupX cannot form a valid channel from the available raw and filtered
+matrices or automatic estimation fails, the report records the reason and
+leaves the original filtered RNA counts unchanged. `raw_path` remains required
+for the existing barcode-rank and other raw-input QC sections.
 
 ---
 
@@ -423,6 +451,7 @@ Each job writes its log to `<output_dir>/logs/QC_<sample_name>_<jobid>.log`.
 | `--output_dir` | `QC` | Directory for HTML reports, RDS files, and logs |
 | `--hto_method` | `HTODemux` | Hashtag demultiplexing method (`HTODemux` or `hashedDrops`); a non-blank `hto_method` sample-sheet row overrides it |
 | `--use_cellbender` | `FALSE` | If `TRUE`, filtered input must resolve to `cellbender_filtered.h5` (or `.hdf5`) |
+| `--use_soupx` | `FALSE` | If `TRUE`, correct filtered RNA counts using SoupX before the 0.1% gene filter |
 | `--mem` | `32` | Memory per job in GB |
 | `--merge_mem` | `64` | Memory for the merge job in GB |
 | `--integration_mem` | `64` | Memory for the integration job in GB |
@@ -448,6 +477,7 @@ Invalid combinations:
 - `--merge_only TRUE --integration_only TRUE`: mutually exclusive.
 - `--merge_only TRUE --skip_merge TRUE`: mutually exclusive.
 - `--run_integration TRUE --skip_merge TRUE` (without `--integration_only TRUE`): integration requires merge.
+- `--use_cellbender TRUE --use_soupx TRUE`: the two RNA correction methods are mutually exclusive.
 
 ```bash
 # Example: larger samples needing more memory
@@ -458,6 +488,7 @@ bash /path/to/submit_QC_batch.sh \
   --mem          32 \
   --merge_mem    96 \
   --integration_mem 128
+# Enable SoupX globally; set each sample's rho using the soupx_contamination row.
 
 # Example: skip per-sample QC and run only merge_analysis/integration on existing sample RDS files
 bash /path/to/submit_QC_batch.sh \

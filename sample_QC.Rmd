@@ -17,6 +17,8 @@ params:
   filtered_path:    ""
   raw_path:         ""
   use_cellbender:   FALSE
+  use_soupx:        FALSE
+  soupx_contamination: NA
   support_dir:      "support_files"
   output_dir:       "."
   # Per-metric hard thresholds. Leave as NA to use the MAD-based defaults.
@@ -96,6 +98,8 @@ param_lines <- c(
   sprintf('[%s] PARAM batch=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$batch)),
   sprintf('[%s] PARAM filtered_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$filtered_path)),
   sprintf('[%s] PARAM raw_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$raw_path)),
+  sprintf('[%s] PARAM use_soupx=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$use_soupx)),
+  sprintf('[%s] PARAM soupx_contamination=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$soupx_contamination)),
   sprintf('[%s] PARAM output_dir=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$output_dir)),
   sprintf('[%s] PARAM min_nCount_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$min_nCount_RNA)),
   sprintf('[%s] PARAM max_nCount_RNA=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$max_nCount_RNA)),
@@ -762,6 +766,324 @@ if (!isTRUE(params$use_cellbender)) {
 }
 ```
 
+# Ambient RNA removal (SoupX)
+When enabled, SoupX estimates or applies a contamination fraction and corrects
+RNA counts before feature filtering. HTO and ADT matrices are not modified.
+Diagnostics include a per-gene total UMI scatter before vs after SoupX (top 25% most
+changed genes by absolute percent difference, plus the 20 genes with the largest absolute
+UMI change; the top 20 by absolute UMI change and the top 20 by absolute percent
+difference are labeled; genes with < 10 UMI in
+either matrix excluded) and a barcode rank plot of the SoupX-corrected filtered barcodes.
+
+It's unclear to me and others, including the broader single-cell community, when this method should be employed with respect to doublet detection and removal. 
+Moreoever, hash-tagged samples may require additional consideration, as the doublet rate is likely much higher than in non-hash-tagged samples. 
+This could influence the effectiveness of ambient RNA removal and the subsequent interpretation of the data.
+I think the optimal order of operations is likely dataset dependent and may vary based on factors such as the presence of hash-tagged samples, the expected doublet rate, the ambient RNA contamination level, and the overall quality of the RNA data.  
+Maybe we can benchmark this at some point. 
+
+```{r soupx-ambient-rna, eval=isTRUE(params$use_soupx), fig.width=10, fig.height=7}
+soupx_rho <- resolve_soupx_contamination(params$soupx_contamination)
+
+if (isTRUE(params$use_cellbender)) {
+  stop("SoupX and CellBender cannot both be enabled for the same sample.", call. = FALSE)
+}
+
+if (is.null(raw_matrix) || nrow(raw_matrix) == 0L || ncol(raw_matrix) == 0L) {
+  cat("SoupX skipped: raw RNA counts are unavailable.\n")
+} else if (!requireNamespace("SoupX", quietly = TRUE)) {
+  stop("use_soupx is TRUE but the SoupX package is not installed.", call. = FALSE)
+} else {
+  soupx_input <- tryCatch(
+    align_soupx_matrices(raw_matrix, seurat),
+    error = function(e) {
+      cat("SoupX skipped: ", conditionMessage(e), "\n", sep = "")
+      NULL
+    }
+  )
+
+  if (!is.null(soupx_input)) {
+    if (ncol(soupx_input$toc) < 3L || nrow(soupx_input$toc) < 3L) {
+      cat("SoupX skipped: at least three filtered cells and genes are required for clustering.\n")
+    } else {
+      soupx_result <- tryCatch({
+        soup_channel <- SoupX::SoupChannel(
+          tod = soupx_input$tod,
+          toc = soupx_input$toc,
+          calcSoupProfile = TRUE
+        )
+
+        cluster_object <- Seurat::CreateSeuratObject(soupx_input$toc, min.cells = 0, min.features = 0)
+        cluster_object <- Seurat::NormalizeData(cluster_object, verbose = FALSE)
+        cluster_object <- Seurat::FindVariableFeatures(cluster_object, verbose = FALSE)
+        cluster_object <- Seurat::ScaleData(cluster_object, verbose = FALSE)
+        npcs <- min(20L, nrow(cluster_object) - 1L, ncol(cluster_object) - 1L)
+        if (npcs < 2L) stop("Insufficient dimensions for SoupX clustering.", call. = FALSE)
+        cluster_object <- Seurat::RunPCA(cluster_object, npcs = npcs, verbose = FALSE)
+        dims <- seq_len(min(10L, npcs))
+        cluster_object <- Seurat::FindNeighbors(
+          cluster_object, dims = dims, k.param = min(20L, ncol(cluster_object) - 1L),
+          graph.name = c("soupx_nn", "soupx_snn"), verbose = FALSE
+        )
+        cluster_object <- Seurat::FindClusters(cluster_object, graph.name = "soupx_snn",
+          cluster.name = "soupx_clusters", verbose = FALSE
+        )
+        cell_clusters <- stats::setNames(
+          as.character(cluster_object$soupx_clusters),
+          colnames(cluster_object)
+        )
+        soup_channel <- SoupX::setClusters(soup_channel, cell_clusters)
+        soup_channel <- tryCatch({
+          pca_embeddings <- Seurat::Embeddings(cluster_object, "pca")[, 1:2, drop = FALSE]
+          colnames(pca_embeddings) <- c("RD1", "RD2")
+          SoupX::setDR(soup_channel, as.data.frame(pca_embeddings))
+        }, error = function(e) soup_channel)
+
+        if (is.na(soupx_rho)) {
+          soup_channel <- SoupX::autoEstCont(soup_channel, doPlot = TRUE, verbose = FALSE)
+        } else {
+          soup_channel <- SoupX::setContaminationFraction(soup_channel, soupx_rho)
+        }
+
+        rho <- soup_channel$metaData$rho
+        if (is.null(rho) || length(rho) == 0L || !is.finite(rho[[1L]])) {
+          stop("SoupX did not return a finite contamination estimate.", call. = FALSE)
+        }
+        corrected_counts <- SoupX::adjustCounts(soup_channel, roundToInt = TRUE, verbose = 0)
+        list(channel = soup_channel, counts = corrected_counts, rho = rho)
+      }, error = function(e) {
+        cat("SoupX correction skipped: ", conditionMessage(e), "\n", sep = "")
+        NULL
+      })
+
+      if (!is.null(soupx_result)) {
+        before_counts <- soupx_input$toc
+        corrected_counts <- soupx_result$counts
+        corrected_counts <- corrected_counts[rownames(before_counts), colnames(before_counts), drop = FALSE]
+        cat("SoupX estimated contamination rho:", signif(soupx_result$rho[[1L]], 4), "\n")
+        cat("Contamination mode:", if (is.na(soupx_rho)) "automatic" else "manual", "\n")
+
+        soup_profile <- soupx_result$channel$soupProfile
+        cat("Average absolute ambient RNA UMI per cell (removed by SoupX):",
+            signif((sum(before_counts) - sum(corrected_counts)) / ncol(before_counts), 4), "\n")
+        if (!is.null(soup_profile) && "est" %in% colnames(soup_profile)) {
+          top_soup_genes <- data.frame(
+            gene = rownames(soup_profile),
+            soup_fraction = soup_profile$est
+          )
+          removed_genes <- intersect(top_soup_genes$gene, rownames(before_counts))
+          avg_removed_umi <- stats::setNames(
+            (Matrix::rowSums(before_counts[removed_genes, , drop = FALSE]) -
+               Matrix::rowSums(corrected_counts[removed_genes, , drop = FALSE])) / ncol(before_counts),
+            removed_genes
+          )
+          top_soup_genes$avg_ambient_umi_per_cell <- as.numeric(avg_removed_umi[top_soup_genes$gene])
+          top_soup_genes <- head(
+            top_soup_genes[order(top_soup_genes$soup_fraction, decreasing = TRUE), ],
+            20L
+          )
+          cat("Top SoupX soup genes:\n")
+          print(knitr::kable(top_soup_genes, digits = 4))
+        } else {
+          cat("SoupX soup-profile estimates are unavailable.\n")
+        }
+
+        mean_umi_per_cell <- mean(Matrix::colSums(before_counts))
+        rho_value <- soupx_result$rho[[1L]]
+        removed_umi_per_cell <- (sum(before_counts) - sum(corrected_counts)) / ncol(before_counts)
+        cat("Mean UMIs per filtered cell:", signif(mean_umi_per_cell, 4), "\n")
+        if (is.finite(average_ambient_rna_umi)) {
+          cat("Empty-droplet shelf mean UMI per barcode (barcode rank plot):",
+              signif(average_ambient_rna_umi, 4), "\n")
+          cat("Ratio of UMIs removed by SoupX per cell to shelf mean UMI:",
+              signif(removed_umi_per_cell / average_ambient_rna_umi, 4), "\n")
+        }
+
+        # Compare the SoupX soup profile with the pooled empty-droplet shelf profile.
+        if (!is.null(ambient_shelf) && nrow(ambient_shelf) > 0L &&
+            !is.null(soup_profile) && "est" %in% colnames(soup_profile)) {
+          tryCatch({
+            raw_umi_order <- order(Matrix::colSums(raw_matrix), decreasing = TRUE)
+            shelf_barcodes <- colnames(raw_matrix)[raw_umi_order[ambient_shelf$rank]]
+            shelf_genes <- intersect(rownames(soup_profile), rownames(raw_matrix))
+            shelf_counts <- Matrix::rowSums(raw_matrix[shelf_genes, shelf_barcodes, drop = FALSE])
+            profile_cmp <- data.frame(
+              gene = shelf_genes,
+              soup_fraction = soup_profile[shelf_genes, "est"],
+              shelf_fraction = as.numeric(shelf_counts / sum(shelf_counts))
+            )
+            profile_cmp <- profile_cmp[profile_cmp$soup_fraction > 0 & profile_cmp$shelf_fraction > 0, , drop = FALSE]
+            cat("Soup profile vs empty-droplet shelf profile: Pearson r =",
+                signif(cor(profile_cmp$soup_fraction, profile_cmp$shelf_fraction), 4),
+                ", Spearman rho =",
+                signif(cor(profile_cmp$soup_fraction, profile_cmp$shelf_fraction, method = "spearman"), 4),
+                "across", nrow(profile_cmp), "genes\n")
+            print(
+              ggplot(profile_cmp, aes(x = shelf_fraction, y = soup_fraction)) +
+                geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50") +
+                geom_point(alpha = 0.4, size = 1) +
+                scale_x_log10() +
+                scale_y_log10() +
+                theme_classic() +
+                ggtitle("SoupX soup profile vs empty-droplet shelf profile") +
+                xlab("Fraction of shelf UMIs per gene (log10)") +
+                ylab("SoupX soup fraction per gene (log10)")
+            )
+          }, error = function(e) {
+            cat("Soup vs shelf profile comparison skipped: ", conditionMessage(e), "\n", sep = "")
+          })
+        }
+
+        # Observed vs expected soup counts for the top soup genes, by cluster.
+        tryCatch({
+          print(SoupX::plotMarkerDistribution(soupx_result$channel))
+        }, error = function(e) {
+          cat("SoupX marker distribution plot skipped: ", conditionMessage(e), "\n", sep = "")
+        })
+        tryCatch({
+          marker_map_genes <- head(rownames(soup_profile)[order(soup_profile$est, decreasing = TRUE)], 5L)
+          print(SoupX::plotMarkerMap(soupx_result$channel, geneSet = marker_map_genes))
+        }, error = function(e) {
+          cat("SoupX marker map plot skipped: ", conditionMessage(e), "\n", sep = "")
+        })
+
+        # Sensitivity of the automatic rho estimate to the soup-quantile setting.
+        if (is.na(soupx_rho)) {
+          sensitivity_quantiles <- c(0.1, 0.3, 0.5, 0.7, 0.9)
+          rho_sensitivity <- data.frame(
+            soup_quantile = sensitivity_quantiles,
+            rho = vapply(sensitivity_quantiles, function(q) {
+              tryCatch(
+                as.numeric(SoupX::autoEstCont(
+                  soupx_result$channel, soupQuantile = q, doPlot = FALSE, verbose = FALSE
+                )$metaData$rho[[1L]]),
+                error = function(e) NA_real_
+              )
+            }, numeric(1L))
+          )
+          if (any(is.finite(rho_sensitivity$rho))) {
+            print(
+              ggplot(rho_sensitivity, aes(x = soup_quantile, y = rho)) +
+                geom_line(na.rm = TRUE) +
+                geom_point(na.rm = TRUE) +
+                geom_hline(yintercept = rho_value, color = "firebrick", linetype = "dashed") +
+                theme_classic() +
+                ggtitle("Sensitivity of estimated rho to soupQuantile") +
+                labs(subtitle = "Dashed line: rho used for correction (default soupQuantile = 0.9)") +
+                xlab("soupQuantile") +
+                ylab("Estimated rho")
+            )
+          }
+        }
+
+        gene_umi_cmp <- data.frame(
+          gene = rownames(before_counts),
+          before_umi = as.numeric(Matrix::rowSums(before_counts)),
+          soupx_umi = as.numeric(Matrix::rowSums(corrected_counts)),
+          stringsAsFactors = FALSE
+        )
+        gene_umi_cmp$change <- gene_umi_cmp$soupx_umi - gene_umi_cmp$before_umi
+        gene_umi_cmp$pct_diff <- 100 * gene_umi_cmp$change / gene_umi_cmp$before_umi
+        gene_umi_cmp$abs_pct_diff <- abs(gene_umi_cmp$pct_diff)
+
+        # Genes with the largest absolute UMI change are always plotted and labeled.
+        top_change_genes <- head(
+          gene_umi_cmp[order(abs(gene_umi_cmp$change), decreasing = TRUE), , drop = FALSE],
+          20L
+        )
+        top_change_genes <- top_change_genes[top_change_genes$before_umi > 0, , drop = FALSE]
+
+        gene_umi_cmp <- gene_umi_cmp[
+          gene_umi_cmp$before_umi >= 10 & gene_umi_cmp$soupx_umi >= 10,
+          , drop = FALSE
+        ]
+
+        if (nrow(gene_umi_cmp) == 0L) {
+          cat("Skipping SoupX gene UMI scatter: no genes had >= 10 UMI before and after correction.\n")
+        } else {
+
+          finite_abs_diff <- gene_umi_cmp$abs_pct_diff[is.finite(gene_umi_cmp$abs_pct_diff)]
+          if (length(finite_abs_diff) == 0L) {
+            cat("Skipping SoupX gene UMI scatter: percent differences are non-finite for all genes.\n")
+          } else {
+            diff_cutoff <- as.numeric(quantile(finite_abs_diff, probs = 0.75, names = FALSE, na.rm = TRUE))
+            genes_to_plot <- gene_umi_cmp[!is.finite(gene_umi_cmp$abs_pct_diff) |
+                                            gene_umi_cmp$abs_pct_diff >= diff_cutoff, , drop = FALSE]
+            genes_to_plot <- rbind(
+              genes_to_plot,
+              top_change_genes[!top_change_genes$gene %in% genes_to_plot$gene, , drop = FALSE]
+            )
+            top_pct_genes <- head(
+              genes_to_plot[order(genes_to_plot$abs_pct_diff, decreasing = TRUE), , drop = FALSE],
+              20L
+            )
+            top_label_genes <- rbind(
+              top_change_genes,
+              top_pct_genes[!top_pct_genes$gene %in% top_change_genes$gene, , drop = FALSE]
+            )
+
+            cat("Plotting", nrow(genes_to_plot), "genes (top 25% by absolute percent difference plus the",
+                "genes with the largest absolute UMI change); labeled:", nrow(top_label_genes),
+                "genes (top 20 by absolute UMI change and top 20 by absolute percent difference) across",
+                ncol(before_counts), "filtered barcodes.\n")
+
+            print(
+              ggplot(genes_to_plot, aes(x = before_umi + 1, y = soupx_umi + 1)) +
+                geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50") +
+                geom_point(aes(color = abs_pct_diff), alpha = 0.7, size = 1.2) +
+                ggrepel::geom_text_repel(
+                  data = top_label_genes,
+                  aes(label = gene),
+                  size = 2.5,
+                  color = "black",
+                  max.overlaps = Inf,
+                  force = 1,
+                  box.padding = 0.25,
+                  point.padding = 0.1,
+                  min.segment.length = 0
+                ) +
+                scale_x_log10() +
+                scale_y_log10() +
+                scale_color_viridis_c(option = "magma", name = "abs % diff") +
+                theme_classic() +
+                ggtitle("Per-gene total UMI: SoupX vs raw filtered (filtered barcodes)") +
+                xlab("Filtered total UMI per gene before SoupX (+1, log10)") +
+                ylab("SoupX-corrected total UMI per gene (+1, log10)")
+            )
+          }
+        }
+
+        soupx_rank_data <- data.frame(UMI_counts = as.numeric(Matrix::colSums(corrected_counts)))
+        soupx_rank_data <- arrange(soupx_rank_data, desc(UMI_counts))
+        soupx_rank_data$rank <- seq_len(nrow(soupx_rank_data))
+        soupx_rank_data$log_rank <- log10(soupx_rank_data$rank)
+        soupx_rank_data$log_umi <- log10(pmax(soupx_rank_data$UMI_counts, 1))
+
+        soupx_rank_plot <- ggplot(soupx_rank_data, aes(x = log_rank, y = log_umi)) +
+          geom_point(color = "purple4", alpha = 0.6, size = 0.7) +
+          theme_classic() +
+          scale_y_continuous(limits = c(0, NA)) +
+          ggtitle("Barcode rank plot – filtered input (SoupX-corrected)") +
+          xlab("log10(barcode rank)") +
+          ylab("log10(UMI counts)")
+
+        if (is.finite(cellranger_threshold)) {
+          soupx_rank_plot <- soupx_rank_plot +
+            geom_hline(yintercept = cellranger_threshold, color = "firebrick")
+        }
+
+        print(soupx_rank_plot)
+
+        seurat <- corrected_counts
+      }
+    }
+  }
+}
+```
+
+```{r soupx-disabled-message, eval=!isTRUE(params$use_soupx), include=TRUE}
+cat("SoupX is disabled (use_soupx = FALSE); filtered RNA counts are unchanged.\n")
+```
+
 # Filter for features present in at least 0.1% of cells
 Removes genes detected in fewer than 0.1% of barcodes before Seurat object creation to reduce matrix sparsity and speed up downstream steps without meaningfully affecting QC.
 
@@ -817,6 +1139,9 @@ if (!is.null(hto_matrix_filtered) || !is.null(adt_matrix_filtered)) {
 
 ```{r hto-section-header, results='asis', echo=FALSE}
 hto_method <- if (is.null(params$hto_method) || is.na(params$hto_method) || !nzchar(params$hto_method)) 'HTODemux' else as.character(params$hto_method)
+# Chunk options such as fig.height are evaluated even when eval=FALSE, so
+# hash_number needs a default when HTO demultiplexing is disabled.
+hash_number <- 1
 if (isTRUE(params$use_hashtag) && !hto_method %in% c('HTODemux', 'hashedDrops')) {
   stop("hto_method must be 'HTODemux' or 'hashedDrops'; got: ", hto_method, call. = FALSE)
 }

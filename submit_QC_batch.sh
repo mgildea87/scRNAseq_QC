@@ -23,6 +23,8 @@
 #   --integration_level <Batch|Sample> integration level when integration runs (default: Sample)
 #   --integration_only <TRUE/FALSE> run only integration from merged_QC.rds (default: FALSE)
 #   --use_cellbender <TRUE/FALSE> use cellbender_filtered.h5 as filtered input (default: FALSE)
+#   --use_soupx <TRUE/FALSE> apply SoupX ambient RNA correction (default: FALSE)
+#                 per-sample rho is set by the soupx_contamination row in samples.csv
 #   --hto_method  <HTODemux|hashedDrops> hashtag demultiplexing method when use_hashtag is TRUE;
 #                 a non-blank hto_method column in the sample sheet overrides this (default: HTODemux)
 # =============================================================================
@@ -53,12 +55,13 @@ RUN_INTEGRATION="FALSE"
 INTEGRATION_LEVEL="Sample"
 INTEGRATION_ONLY="FALSE"
 USE_CELLBENDER="FALSE"
+USE_SOUPX="FALSE"
 HTO_METHOD="HTODemux"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h)
-      sed -n '1,27p' "$0" # prints header block lines
+      sed -n '1,30p' "$0" # prints header block lines
       exit 0
       ;;
     --sample_sheet)
@@ -165,6 +168,14 @@ while [[ $# -gt 0 ]]; do
       fi
       shift 2
       ;;
+    --use_soupx)
+      USE_SOUPX="${2-}"
+      if [[ -z "${USE_SOUPX}" || "${USE_SOUPX}" == --* ]]; then
+        echo "ERROR: --use_soupx must be TRUE or FALSE." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
     --hto_method)
       HTO_METHOD="${2-}"
       if [[ -z "${HTO_METHOD}" || "${HTO_METHOD}" == --* ]]; then
@@ -228,6 +239,21 @@ elif [[ "${USE_CELLBENDER_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
   USE_CELLBENDER="FALSE"
 else
   echo "ERROR: --use_cellbender must be TRUE or FALSE." >&2
+  exit 1
+fi
+
+USE_SOUPX_LOWER="$(echo "${USE_SOUPX}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${USE_SOUPX_LOWER}" =~ ^(true|t|1|yes|y)$ ]]; then
+  USE_SOUPX="TRUE"
+elif [[ "${USE_SOUPX_LOWER}" =~ ^(false|f|0|no|n)$ ]]; then
+  USE_SOUPX="FALSE"
+else
+  echo "ERROR: --use_soupx must be TRUE or FALSE." >&2
+  exit 1
+fi
+
+if [[ "${USE_CELLBENDER}" == "TRUE" && "${USE_SOUPX}" == "TRUE" ]]; then
+  echo "ERROR: --use_cellbender TRUE and --use_soupx TRUE cannot be used together." >&2
   exit 1
 fi
 
@@ -351,7 +377,7 @@ fi
 echo "Submitting ${#SAMPLES[@]} job(s)..."
 echo "  Sample sheet : ${SAMPLE_SHEET}"
 echo "  Output dir   : ${OUTPUT_DIR}"
-echo "  Partition    : ${NODE_TYPE}  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Merge only: ${MERGE_ONLY}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}  |  HTO method: ${HTO_METHOD}"
+echo "  Partition    : ${NODE_TYPE}  |  Per-sample Mem: ${MEM_GB}G  |  Merge Mem: ${MERGE_MEM_GB}G  |  Integration Mem: ${INTEGRATION_MEM_GB}G  |  Time: ${WALL_TIME}  |  Merge only: ${MERGE_ONLY}  |  Skip merge: ${SKIP_MERGE}  |  Run integration: ${RUN_INTEGRATION}  |  Integration level: ${INTEGRATION_LEVEL:-NA}  |  Integration only: ${INTEGRATION_ONLY}  |  Use CellBender: ${USE_CELLBENDER}  |  Use SoupX: ${USE_SOUPX}  |  HTO method: ${HTO_METHOD}"
 echo "----------------------------------------------"
 
 if [[ "${INTEGRATION_ONLY}" == "TRUE" ]]; then
@@ -466,6 +492,7 @@ for SAMPLE in "${SAMPLES[@]}"; do
       echo \"Sample   : ${SAMPLE}\"
       echo \"use_cellbender: ${USE_CELLBENDER}\"
       echo \"hto_method: ${HTO_METHOD}\"
+      echo \"use_soupx: ${USE_SOUPX}\"
       echo \"Start    : \$(date)\"
       Rscript --vanilla "${TEMPLATE_DIR}/qc_batch_runner.R" \
         --template     \"${TEMPLATE_DIR}/sample_QC.Rmd\" \
@@ -473,6 +500,7 @@ for SAMPLE in "${SAMPLES[@]}"; do
         --sample_name  \"${SAMPLE}\" \
         --output_dir   \"${OUTPUT_DIR}\" \
         --use_cellbender \"${USE_CELLBENDER}\" \
+        --use_soupx \"${USE_SOUPX}\" \
         --hto_method \"${HTO_METHOD}\" \
         --integration_level \"${INTEGRATION_LEVEL}\"
       echo \"Finished : \$(date)\"

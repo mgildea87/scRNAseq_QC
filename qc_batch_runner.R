@@ -43,6 +43,8 @@
 #   --integration_level Integration grouping level: Batch or Sample (default: Sample)
 #   --use_cellbender If TRUE, prefer/require cellbender_filtered.h5 for
 #                   filtered input resolution (default: FALSE)
+#   --use_soupx    If TRUE, apply SoupX ambient RNA correction (default: FALSE)
+#                   soupx_contamination is supplied per sample in the sample sheet
 #   --hto_method    HTODemux or hashedDrops; default hashtag demultiplexing method
 #                   (a non-blank hto_method sample-sheet row overrides it) (default: HTODemux)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,6 +73,7 @@ print_usage_and_exit <- function(status = 0L) {
     "  --integration_only <TRUE/FALSE> Run only integration from existing merged_QC.rds [default: FALSE]\n",
     "  --integration_level <Batch|Sample> Integration grouping level [default: Sample]\n",
     "  --use_cellbender <TRUE/FALSE> Use cellbender_filtered.h5 as filtered input [default: FALSE]\n",
+    "  --use_soupx <TRUE/FALSE> Apply SoupX ambient RNA correction [default: FALSE]\n",
     "  --hto_method <HTODemux|hashedDrops> Hashtag demultiplexing method; sample-sheet hto_method row overrides [default: HTODemux]\n",
     "  --help                  Show this help message\n",
     sep = ""
@@ -93,10 +96,9 @@ parse_cli_args <- function(args) {
     run_integration = "FALSE",
     integration_only = "FALSE",
     use_cellbender = "FALSE",
+    use_soupx = "FALSE",
     hto_method = "HTODemux"
   )
-
-  if (length(args) == 0L) return(defaults)
 
   i <- 1L
   while (i <= length(args)) {
@@ -139,6 +141,10 @@ parse_cli_args <- function(args) {
   defaults$run_integration <- parse_logical_flag(defaults$run_integration, "--run_integration")
   defaults$integration_only <- parse_logical_flag(defaults$integration_only, "--integration_only")
   defaults$use_cellbender <- parse_logical_flag(defaults$use_cellbender, "--use_cellbender")
+  defaults$use_soupx <- parse_logical_flag(defaults$use_soupx, "--use_soupx")
+  if (isTRUE(defaults$use_cellbender) && isTRUE(defaults$use_soupx)) {
+    stop("--use_cellbender TRUE and --use_soupx TRUE cannot be used together.", call. = FALSE)
+  }
 
   canon_hto <- c(htodemux = "HTODemux", hasheddrops = "hashedDrops")
   hto_key <- tolower(trimws(as.character(defaults$hto_method)))
@@ -177,6 +183,7 @@ message("  output_dir      : ", opt$output_dir)
 message("  sample_name     : ", if (is.null(opt$sample_name)) "<all>" else opt$sample_name)
 message("  ncores          : ", opt$ncores)
 message("  use_cellbender  : ", opt$use_cellbender)
+message("  use_soupx       : ", opt$use_soupx)
 message("  hto_method      : ", opt$hto_method)
 message("  skip_merge      : ", opt$skip_merge)
 message("  run_integration : ", opt$run_integration)
@@ -352,6 +359,16 @@ if (length(missing_cols) > 0) {
 
 if (anyDuplicated(samples$sample_name)) {
   stop("Duplicate sample_name entries found in sample sheet.", call. = FALSE)
+}
+
+# Optional SoupX rho values are sample-specific; blank or NA means automatic estimation.
+if (!"soupx_contamination" %in% colnames(samples)) {
+  samples$soupx_contamination <- NA_real_
+} else {
+  samples$soupx_contamination <- normalize_sample_soupx_contamination(
+    samples$soupx_contamination,
+    samples$sample_name
+  )
 }
 
 # Optional batch column; default to "A" when missing or blank.
@@ -610,6 +627,10 @@ for (i in seq_len(nrow(samples))) {
   message("  ", samples$sample_name[[i]])
   message("    filtered: ", samples$filtered_path[[i]])
   message("    raw     : ", samples$raw_path[[i]])
+  message(
+    "    SoupX rho: ",
+    if (is.na(samples$soupx_contamination[[i]])) "NA (automatic)" else samples$soupx_contamination[[i]]
+  )
 }
 
 # ── Create output directories ─────────────────────────────────────────────────
@@ -641,6 +662,8 @@ render_sample <- function(row) {
         filtered_path    = row[["filtered_path"]],
         raw_path         = row[["raw_path"]],
         use_cellbender   = isTRUE(opt$use_cellbender),
+        use_soupx        = isTRUE(opt$use_soupx),
+        soupx_contamination = row[["soupx_contamination"]],
         support_dir      = template_support_dir,
         output_dir       = opt$output_dir,
         min_nCount_RNA   = suppressWarnings(as.numeric(row[["min_nCount_RNA"]])),
