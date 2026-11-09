@@ -34,8 +34,21 @@ testthat::test_that("R scripts and R Markdown parse", {
   testthat::expect_match(template_text, "use_soupx:        FALSE", fixed = TRUE)
   testthat::expect_match(template_text, "PARAM soupx_contamination", fixed = TRUE)
   testthat::expect_match(template_text, "SoupX::autoEstCont", fixed = TRUE)
+  testthat::expect_match(template_text, "rho_fit$dd$useEst", fixed = TRUE)
+  testthat::expect_match(template_text, "Accepted SoupX marker rho estimates", fixed = TRUE)
+  testthat::expect_no_match(template_text, "SoupX::setDR", fixed = TRUE)
+  testthat::expect_no_match(template_text, "SoupX::plotMarkerMap", fixed = TRUE)
+  testthat::expect_no_match(template_text, "SoupX::plotMarkerDistribution", fixed = TRUE)
   testthat::expect_match(template_text, "SoupX::adjustCounts(soup_channel, roundToInt = TRUE, verbose = 0)", fixed = TRUE)
+  testthat::expect_match(template_text, "soupx_uncorrected_counts <- NULL", fixed = TRUE)
+  testthat::expect_match(template_text, "soupx_uncorrected_counts <- seurat", fixed = TRUE)
   testthat::expect_match(template_text, "seurat <- corrected_counts", fixed = TRUE)
+  testthat::expect_match(template_text, 'seurat[["RNA_uncorrected"]] <- CreateAssayObject(counts = uncorrected_counts)', fixed = TRUE)
+  testthat::expect_match(template_text, 'DefaultAssay(seurat) <- "RNA"', fixed = TRUE)
+  testthat::expect_lt(
+    regexpr("soupx_uncorrected_counts <- NULL", template_text),
+    regexpr("```\\{r soupx-ambient-rna", template_text)
+  )
   testthat::expect_match(template_text, "SoupX and CellBender cannot both be enabled", fixed = TRUE)
   testthat::expect_lt(
     regexpr("```\\{r soupx-ambient-rna", template_text),

@@ -349,6 +349,7 @@ validate_raw_adt_path(params$use_adt, params$raw_adt_path)
 
 seurat     <- read_10x_input(params$filtered_path, "filtered")
 raw_matrix <- read_10x_input(params$raw_path, "raw")
+soupx_uncorrected_counts <- NULL
 
 # Resolve optional HTO (cell hashing) and ADT (CITE-seq) matrices; no-op when
 # neither use_hashtag nor use_adt is set (default), leaving RNA-only behavior unchanged.
@@ -768,12 +769,18 @@ if (!isTRUE(params$use_cellbender)) {
 
 # Ambient RNA removal (SoupX)
 When enabled, SoupX estimates or applies a contamination fraction and corrects
-RNA counts before feature filtering. HTO and ADT matrices are not modified.
+RNA counts before feature filtering. The corrected matrix remains the default
+`RNA` assay used downstream; after successful correction, the original filtered
+RNA counts are also retained in an `RNA_uncorrected` assay for the same retained
+cells. HTO and ADT matrices are not modified.
 Diagnostics include a per-gene total UMI scatter before vs after SoupX (top 25% most
 changed genes by absolute percent difference, plus the 20 genes with the largest absolute
 UMI change; the top 20 by absolute UMI change and the top 20 by absolute percent
 difference are labeled; genes with < 10 UMI in
-either matrix excluded) and a barcode rank plot of the SoupX-corrected filtered barcodes.
+either matrix excluded), a barcode rank plot of the SoupX-corrected filtered barcodes,
+and—when rho is estimated automatically—a table and cluster-level rho plot for the top
+genes whose accepted estimates contribute to rho. The PCA-coordinate SoupX marker map
+is omitted.
 
 It's unclear to me and others, including the broader single-cell community, when this method should be employed with respect to doublet detection and removal. 
 Moreoever, hash-tagged samples may require additional consideration, as the doublet rate is likely much higher than in non-hash-tagged samples. 
@@ -832,11 +839,6 @@ if (is.null(raw_matrix) || nrow(raw_matrix) == 0L || ncol(raw_matrix) == 0L) {
           colnames(cluster_object)
         )
         soup_channel <- SoupX::setClusters(soup_channel, cell_clusters)
-        soup_channel <- tryCatch({
-          pca_embeddings <- Seurat::Embeddings(cluster_object, "pca")[, 1:2, drop = FALSE]
-          colnames(pca_embeddings) <- c("RD1", "RD2")
-          SoupX::setDR(soup_channel, as.data.frame(pca_embeddings))
-        }, error = function(e) soup_channel)
 
         if (is.na(soupx_rho)) {
           soup_channel <- SoupX::autoEstCont(soup_channel, doPlot = TRUE, verbose = FALSE)
@@ -859,8 +861,92 @@ if (is.null(raw_matrix) || nrow(raw_matrix) == 0L || ncol(raw_matrix) == 0L) {
         before_counts <- soupx_input$toc
         corrected_counts <- soupx_result$counts
         corrected_counts <- corrected_counts[rownames(before_counts), colnames(before_counts), drop = FALSE]
-        cat("SoupX estimated contamination rho:", signif(soupx_result$rho[[1L]], 4), "\n")
+        soupx_uncorrected_counts <- seurat
+        rho_value <- soupx_result$rho[[1L]]
+        cat("SoupX estimated contamination rho:", signif(rho_value, 4), "\n")
         cat("Contamination mode:", if (is.na(soupx_rho)) "automatic" else "manual", "\n")
+
+        if (is.na(soupx_rho)) {
+          rho_fit <- soupx_result$channel$fit
+          required_marker_fields <- c("gene", "useEst", "rhoEst", "rhoLow", "rhoHigh", "tfidf", "soupExp")
+          if (!is.null(rho_fit$dd) && all(required_marker_fields %in% colnames(rho_fit$dd))) {
+            accepted_marker_estimates <- rho_fit$dd[
+              !is.na(rho_fit$dd$useEst) & rho_fit$dd$useEst,
+              ,
+              drop = FALSE
+            ]
+            if (nrow(accepted_marker_estimates) > 0L) {
+              marker_groups <- split(accepted_marker_estimates, accepted_marker_estimates$gene)
+              marker_summary <- do.call(rbind, lapply(marker_groups, function(gene_rows) {
+                data.frame(
+                  gene = as.character(gene_rows$gene[[1L]]),
+                  accepted_cluster_estimates = nrow(gene_rows),
+                  tfidf = gene_rows$tfidf[[1L]],
+                  soup_fraction = gene_rows$soupExp[[1L]],
+                  median_cluster_rho = stats::median(gene_rows$rhoEst, na.rm = TRUE),
+                  stringsAsFactors = FALSE
+                )
+              }))
+              marker_summary <- marker_summary[
+                order(
+                  -marker_summary$accepted_cluster_estimates,
+                  -marker_summary$tfidf,
+                  -marker_summary$soup_fraction
+                ),
+                ,
+                drop = FALSE
+              ]
+              top_rho_markers <- head(marker_summary, 20L)
+              cat(
+                "Top genes contributing accepted gene/cluster estimates to automatic rho ",
+                "(ranked by number of accepted cluster estimates):\n",
+                sep = ""
+              )
+              print(knitr::kable(top_rho_markers, digits = 4))
+
+              marker_plot_data <- accepted_marker_estimates[
+                accepted_marker_estimates$gene %in% top_rho_markers$gene,
+                ,
+                drop = FALSE
+              ]
+              marker_plot_data$gene <- factor(
+                marker_plot_data$gene,
+                levels = rev(top_rho_markers$gene)
+              )
+              marker_jitter <- position_jitter(width = 0.15, height = 0, seed = 1)
+              print(
+                ggplot(marker_plot_data, aes(x = gene, y = rhoEst)) +
+                  geom_hline(yintercept = rho_value, color = "firebrick", linetype = "dashed") +
+                  geom_errorbar(
+                    aes(ymin = rhoLow, ymax = rhoHigh),
+                    width = 0.2,
+                    alpha = 0.4,
+                    position = marker_jitter
+                  ) +
+                  geom_point(
+                    position = marker_jitter,
+                    alpha = 0.7,
+                    size = 1.8
+                  ) +
+                  coord_flip(ylim = c(0, 1)) +
+                  theme_classic() +
+                  ggtitle("Accepted SoupX marker rho estimates") +
+                  labs(
+                    subtitle = "Points are accepted gene/cluster estimates; bars are per-estimate 95% intervals",
+                    x = "Marker gene",
+                    y = "Cluster-level rho estimate",
+                    caption = "Dashed line: global rho used for correction"
+                  )
+              )
+            } else {
+              cat("No accepted gene/cluster marker estimates were available for automatic rho.\n")
+            }
+          } else {
+            cat("SoupX did not expose the expected marker-fit details for automatic rho.\n")
+          }
+        } else {
+          cat("Manual rho supplied; no genes were used to estimate rho.\n")
+        }
 
         soup_profile <- soupx_result$channel$soupProfile
         cat("Average absolute ambient RNA UMI per cell (removed by SoupX):",
@@ -888,7 +974,6 @@ if (is.null(raw_matrix) || nrow(raw_matrix) == 0L || ncol(raw_matrix) == 0L) {
         }
 
         mean_umi_per_cell <- mean(Matrix::colSums(before_counts))
-        rho_value <- soupx_result$rho[[1L]]
         removed_umi_per_cell <- (sum(before_counts) - sum(corrected_counts)) / ncol(before_counts)
         cat("Mean UMIs per filtered cell:", signif(mean_umi_per_cell, 4), "\n")
         if (is.finite(average_ambient_rna_umi)) {
@@ -932,19 +1017,6 @@ if (is.null(raw_matrix) || nrow(raw_matrix) == 0L || ncol(raw_matrix) == 0L) {
             cat("Soup vs shelf profile comparison skipped: ", conditionMessage(e), "\n", sep = "")
           })
         }
-
-        # Observed vs expected soup counts for the top soup genes, by cluster.
-        tryCatch({
-          print(SoupX::plotMarkerDistribution(soupx_result$channel))
-        }, error = function(e) {
-          cat("SoupX marker distribution plot skipped: ", conditionMessage(e), "\n", sep = "")
-        })
-        tryCatch({
-          marker_map_genes <- head(rownames(soup_profile)[order(soup_profile$est, decreasing = TRUE)], 5L)
-          print(SoupX::plotMarkerMap(soupx_result$channel, geneSet = marker_map_genes))
-        }, error = function(e) {
-          cat("SoupX marker map plot skipped: ", conditionMessage(e), "\n", sep = "")
-        })
 
         # Sensitivity of the automatic rho estimate to the soup-quantile setting.
         if (is.na(soupx_rho)) {
@@ -1107,6 +1179,16 @@ seurat <- seurat[, keep_cells_10, drop = FALSE]
 
 # Convert the filtered sparse matrix to a Seurat object and compute per-cell QC metrics
 seurat               <- CreateSeuratObject(seurat, min.cells = 0, min.features = 0)
+if (!is.null(soupx_uncorrected_counts)) {
+  uncorrected_counts <- dash_feature_names(soupx_uncorrected_counts)
+  uncorrected_counts <- uncorrected_counts[, colnames(seurat), drop = FALSE]
+  seurat[["RNA_uncorrected"]] <- CreateAssayObject(counts = uncorrected_counts)
+  DefaultAssay(seurat) <- "RNA"
+  cat(
+    "Attached uncorrected filtered RNA counts as RNA_uncorrected assay with",
+    nrow(uncorrected_counts), "features and", ncol(uncorrected_counts), "retained cells.\n"
+  )
+}
 seurat[["percent.mt"]] <- PercentageFeatureSet(seurat, pattern = mt_pattern)
 seurat$Sample        <- rep(params$sample_name, ncol(seurat))
 seurat$batch         <- rep(params$batch, ncol(seurat))

@@ -197,7 +197,12 @@ Enable it with `--use_soupx TRUE` to build a SoupChannel from the raw RNA matrix
 (`raw_path`) and filtered RNA counts. The sample QC report clusters filtered
 cells, estimates the contamination fraction automatically, corrects the RNA
 counts before the 0.1% gene filter, and plots the estimated rho, soup profile,
-and before/after UMI changes. HTO and ADT counts are not altered.
+accepted rho-contributing marker genes with their cluster-level estimates, and
+before/after UMI changes. The corrected counts remain the default `RNA` assay
+and feed all downstream workflow steps. When correction succeeds, the original
+filtered RNA counts are retained in a separate `RNA_uncorrected` assay for the
+same retained cells; that assay keeps the original filtered feature set. The
+PCA-coordinate SoupX marker map is not shown. HTO and ADT counts are not altered.
 
 Set the optional `soupx_contamination` row in `samples.csv` independently for
 each sample: `NA` or blank estimates rho with `autoEstCont`, while a numeric
