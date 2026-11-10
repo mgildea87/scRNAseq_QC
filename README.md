@@ -190,6 +190,14 @@ Supported input formats:
 For `.h5` inputs, the QC template currently expects one scRNA matrix per file.
 CellBender filtered input is opt-in via `--use_cellbender TRUE`.
 
+The barcode-rank report calculates the ambient shelf from all raw barcodes.
+For large datasets its rank and slope plots display up to 50,000
+deterministically selected points, plus a few threshold, shelf and slope
+landmarks. This reduces rendering time without subsampling shelf detection or
+the SoupX shelf-profile comparison. The centered smoothing uses a linear-time
+rolling mean; floating-point rounding can affect the chosen boundaries when
+slopes are nearly tied.
+
 ---
 
 ## Ambient RNA correction (SoupX)

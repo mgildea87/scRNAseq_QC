@@ -20,6 +20,122 @@ read_feature_reference_names <- function(feature_reference_path) {
   feature_names
 }
 
+centered_rolling_mean <- function(values, window) {
+  n <- length(values)
+  if (length(window) != 1L || is.na(window) || window < 1L ||
+      window != floor(window) || window %% 2L != 1L || window > n) {
+    stop("Rolling mean window must be an odd integer between 1 and length(values).",
+         call. = FALSE)
+  }
+  if (any(!is.finite(values))) {
+    stop("Rolling mean values must be finite.", call. = FALSE)
+  }
+
+  half_window <- (window - 1L) %/% 2L
+  # Center before accumulating to limit cancellation, and keep flat windows
+  # exactly flat so rounding does not invent local minima on plateaus.
+  baseline <- values[[1L]]
+  prefix <- c(0, cumsum(values - baseline))
+  n_windows <- n - window + 1L
+  starts <- seq_len(n_windows)
+  ends <- starts + window - 1L
+  means <- baseline + (prefix[ends + 1L] - prefix[starts]) / window
+  changes <- c(0, cumsum(values[-1L] != values[-n]))
+  constant <- changes[ends] == changes[starts]
+  means[constant] <- values[starts[constant]]
+  result <- rep(NA_real_, n)
+  result[seq_len(n_windows) + half_window] <- means
+  result
+}
+
+find_ambient_shelf <- function(bc_rank_data, cell_count_threshold,
+                               smooth_fun = centered_rolling_mean) {
+  valid_slope <- bc_rank_data[
+    bc_rank_data$UMI_counts > 0 & !is.na(bc_rank_data$moving_slope),
+    , drop = FALSE
+  ]
+  ambient_peak <- NULL
+  ambient_shelf <- NULL
+  first_drop_rank <- NA_real_
+  second_drop_rank <- NA_real_
+  average_ambient_rna_umi <- NA_real_
+
+  if (nrow(valid_slope) > 20L) {
+    slope_vals <- valid_slope$moving_slope
+    smooth_k <- max(11L, as.integer(0.005 * length(slope_vals)))
+    if (smooth_k %% 2L == 0L) smooth_k <- smooth_k + 1L
+    smooth_k <- min(smooth_k, length(slope_vals) - (1L - length(slope_vals) %% 2L))
+    slope_smooth <- smooth_fun(slope_vals, smooth_k)
+
+    finite_idx <- which(is.finite(slope_smooth))
+    if (length(finite_idx) >= 3L) {
+      slope_finite <- slope_smooth[finite_idx]
+      local_min_finite_idx <- which(
+        slope_finite[2:(length(slope_finite) - 1L)] <= slope_finite[1:(length(slope_finite) - 2L)] &
+          slope_finite[2:(length(slope_finite) - 1L)] <= slope_finite[3:length(slope_finite)]
+      ) + 1L
+
+      if (length(local_min_finite_idx) >= 2L) {
+        local_min_idx <- finite_idx[local_min_finite_idx]
+        deep_cutoff <- as.numeric(stats::quantile(slope_finite, probs = 0.20, names = FALSE))
+        deep_min_idx <- local_min_idx[slope_smooth[local_min_idx] <= deep_cutoff]
+        selected_min_idx <- if (length(deep_min_idx) >= 2L) {
+          deep_min_idx
+        } else {
+          local_min_idx[order(slope_smooth[local_min_idx])[seq_len(min(2L, length(local_min_idx)))]]
+        }
+
+        if (length(selected_min_idx) >= 2L) {
+          selected_min_idx <- sort(selected_min_idx)
+          first_drop_rank <- valid_slope$rank[selected_min_idx[1L]]
+          second_drop_rank <- valid_slope$rank[selected_min_idx[2L]]
+          shelf_candidates <- valid_slope[
+            valid_slope$rank > first_drop_rank & valid_slope$rank < second_drop_rank,
+            , drop = FALSE
+          ]
+          if (nrow(shelf_candidates) > 0L) {
+            ambient_shelf <- shelf_candidates
+            average_ambient_rna_umi <- mean(ambient_shelf$UMI_counts, na.rm = TRUE)
+            ambient_peak <- shelf_candidates[which.min(abs(shelf_candidates$moving_slope)), , drop = FALSE]
+          }
+        }
+      }
+    }
+  }
+
+  if (is.null(ambient_peak) && nrow(valid_slope) > 0L) {
+    fallback_set <- valid_slope
+    if (is.finite(cell_count_threshold)) {
+      fallback_set <- valid_slope[valid_slope$UMI_counts <= cell_count_threshold, , drop = FALSE]
+    }
+    if (nrow(fallback_set) > 0L) {
+      ambient_shelf <- fallback_set
+      average_ambient_rna_umi <- mean(ambient_shelf$UMI_counts, na.rm = TRUE)
+      ambient_peak <- fallback_set[which.min(abs(fallback_set$moving_slope)), , drop = FALSE]
+    }
+  }
+
+  list(
+    ambient_shelf = ambient_shelf,
+    ambient_peak = ambient_peak,
+    first_drop_rank = first_drop_rank,
+    second_drop_rank = second_drop_rank,
+    average_ambient_rna_umi = average_ambient_rna_umi
+  )
+}
+
+barcode_plot_indices <- function(n, landmarks = integer(), max_points = 50000L) {
+  if (n <= max_points) return(seq_len(n))
+  linear_n <- max_points %/% 2L
+  log_n <- max_points - linear_n
+  indices <- c(
+    round(seq(1, n, length.out = linear_n)),
+    round(exp(seq(0, log(n), length.out = log_n))),
+    landmarks
+  )
+  sort(unique(as.integer(indices[is.finite(indices) & indices >= 1 & indices <= n])))
+}
+
 select_10x_assay_matrix <- function(x, feature_types, label, input_path) {
   if (inherits(x, "Matrix") || is.matrix(x)) return(x)
   if (!is.list(x) || length(x) == 0L) {

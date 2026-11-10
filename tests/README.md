@@ -32,6 +32,7 @@ rendered report that runs the same suite and documents cluster smoke checks.
 | Test file | Coverage |
 |-----------|----------|
 | `test-adt-qc.R` | ADT MAD-based defaults and explicit thresholds; ADT filter boundaries and disabled no-op behavior; HTO Singlet-only mask; `recoverDoublets` PCA/UMAP name handling; validation of the optional raw ADT path override. |
+| `test-ambient-shelf.R` | Linear-time smoothing against the original convolution, shelf selection and fallback cases, deterministic plot sampling, and raw-barcode rank mapping. |
 | `test-hto-adt-split.R` | Splitting combined antibody features using canonical feature-reference names; clear errors for missing or invalid reference/HTO names; per-HTO thresholds derived from the minimum CLR expression among assigned Singlets. |
 | `test-sample-sheet.R` | Reconstructing and selecting samples from the transposed sheet; rejecting malformed sheet structure. |
 | `test-static-checks.R` | Parsing the runner and sample QC R Markdown; checking HTO demultiplexing and Singlet logic, raw ADT override/fallback routing, SoupX placement/configuration, accepted rho-marker reporting, retention of original RNA counts in `RNA_uncorrected`, removal of the PCA-coordinate SoupX map, and runner validation; integration-level defaults; shell syntax; sample-name extraction; optional `scDblFinder` availability. |
