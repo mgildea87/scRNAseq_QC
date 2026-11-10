@@ -135,6 +135,7 @@ row must exactly match the corresponding sample column header.
 | `adt_path` | No | Direct path to a separate filtered ADT matrix; takes priority over matrix splitting |
 | `raw_adt_path` | No | Optional direct path override for the raw ADT matrix used for DSB empty-droplet background; if blank, ADT is resolved from the `Antibody Capture` matrix in `raw_path`; barcodes must match filtered ADT |
 | `hto_features` | For combined HTO/ADT matrix | Exact HTO names from the reference `name` column, separated by `;` or `,` |
+| `hto_ids_to_keep` | No | HTO sample IDs to retain after demultiplexing and doublet removal, separated by `;` or `,`; blank keeps all HTOs |
 | `min_nCount_ADT` / `max_nCount_ADT` | No | Lower/upper ADT UMI bounds; `NA` uses MAD minimum or no upper cap; only applies when ADT is enabled |
 | `dsb_background_rna_max` | No | Override for maximum log10(RNA UMI) among empty-droplet background barcodes |
 | `dsb_background_prot_min` / `dsb_background_prot_max` | No | Overrides for the log10(ADT UMI) band defining empty-droplet background barcodes |
@@ -167,6 +168,7 @@ use_hashtag,FALSE,FALSE
 use_adt,FALSE,FALSE
 min_nCount_ADT,NA,NA
 max_nCount_ADT,NA,NA
+hto_ids_to_keep,NA,NA
 ```
 
 `Control_1` uses automatic MAD thresholds. `Treatment_1` uses explicit RNA
@@ -275,6 +277,10 @@ section that:
   `scDblFinder`/`scater`/`gridExtra`), then retains Singlets only before RNA
   filtering/clustering. The intra-sample doublet prediction is retained as
   metadata on the saved Singlet cells.
+- If `hto_ids_to_keep` is non-blank, applies that semicolon- or comma-separated
+  list after doublet removal. This does not limit the HTOs used for
+  demultiplexing or doublet detection; unknown IDs are reported as an error.
+  Blank preserves all retained HTO identities.
 
 **`sample_name` vs `library_id` semantics:** for hashtagged samples,
 `qc_batch_runner.R`'s merge step keeps `library_id` = the pooled library name

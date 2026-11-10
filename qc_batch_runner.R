@@ -20,7 +20,7 @@
 # Optional per-sample hashtag (HTO) / CITE-seq (ADT) fields: use_hashtag,
 # hto_method (HTODemux [default] or hashedDrops),
 # use_adt, feature_reference_path, hto_path, adt_path, raw_adt_path,
-# hto_features,
+# hto_features, hto_ids_to_keep (applied after doublet removal; blank keeps all),
 # min_nCount_ADT, max_nCount_ADT, dsb_background_rna_max,
 # dsb_background_prot_min, dsb_background_prot_max. See README.md for details.
 #
@@ -603,7 +603,7 @@ if (!"use_adt" %in% colnames(samples)) {
 }
 
 hto_adt_char_cols <- c("feature_reference_path", "hto_path", "adt_path",
-                       "raw_adt_path", "hto_features")
+                       "raw_adt_path", "hto_features", "hto_ids_to_keep")
 for (col in hto_adt_char_cols) {
   if (!col %in% colnames(samples)) {
     samples[[col]] <- ""
@@ -683,6 +683,7 @@ render_sample <- function(row) {
         adt_path         = row[["adt_path"]],
         raw_adt_path     = row[["raw_adt_path"]],
         hto_features     = row[["hto_features"]],
+        hto_ids_to_keep  = row[["hto_ids_to_keep"]],
         dsb_background_rna_max  = suppressWarnings(as.numeric(row[["dsb_background_rna_max"]])),
         dsb_background_prot_min = suppressWarnings(as.numeric(row[["dsb_background_prot_min"]])),
         dsb_background_prot_max = suppressWarnings(as.numeric(row[["dsb_background_prot_max"]]))

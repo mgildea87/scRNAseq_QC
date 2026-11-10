@@ -162,6 +162,31 @@ hto_singlet_keep_mask <- function(hto_class) {
   !is.na(hto_class) & as.character(hto_class) == "Singlet"
 }
 
+hto_id_keep_mask <- function(hash_id, hto_ids_to_keep = "",
+                             available_hto_ids = unique(hash_id)) {
+  if (length(hto_ids_to_keep) != 1L) {
+    stop("hto_ids_to_keep must be a single comma- or semicolon-separated string.",
+         call. = FALSE)
+  }
+  if (is.na(hto_ids_to_keep) || !nzchar(trimws(hto_ids_to_keep))) {
+    return(rep(TRUE, length(hash_id)))
+  }
+
+  keep_ids <- trimws(strsplit(as.character(hto_ids_to_keep), "[;,]")[[1L]])
+  keep_ids <- unique(keep_ids[nzchar(keep_ids)])
+  if (length(keep_ids) == 0L) {
+    stop("hto_ids_to_keep must contain at least one HTO ID when not blank.",
+         call. = FALSE)
+  }
+  missing_ids <- setdiff(keep_ids, available_hto_ids)
+  if (length(missing_ids) > 0L) {
+    stop("Requested HTO IDs not found in the HTO assay: ",
+         paste(missing_ids, collapse = ", "), call. = FALSE)
+  }
+
+  !is.na(hash_id) & as.character(hash_id) %in% keep_ids
+}
+
 resolve_hto_doublet_dimreds <- function(reduced_dim_names) {
   reduced_dim_names <- as.character(reduced_dim_names)
   pca_names <- reduced_dim_names[grepl("pca", reduced_dim_names, ignore.case = TRUE)]

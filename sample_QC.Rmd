@@ -42,6 +42,7 @@ params:
   adt_path:               ""
   raw_adt_path:           ""
   hto_features:           ""
+  hto_ids_to_keep:        ""
   dsb_background_rna_max:  NA
   dsb_background_prot_min: NA
   dsb_background_prot_max: NA
@@ -118,6 +119,7 @@ param_lines <- c(
   sprintf('[%s] PARAM adt_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$adt_path)),
   sprintf('[%s] PARAM raw_adt_path=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$raw_adt_path)),
   sprintf('[%s] PARAM hto_features=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$hto_features)),
+  sprintf('[%s] PARAM hto_ids_to_keep=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$hto_ids_to_keep)),
   sprintf('[%s] PARAM dsb_background_rna_max=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$dsb_background_rna_max)),
   sprintf('[%s] PARAM dsb_background_prot_min=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$dsb_background_prot_min)),
   sprintf('[%s] PARAM dsb_background_prot_max=%s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), as.character(params$dsb_background_prot_max))
@@ -1461,6 +1463,27 @@ cat('Cells before filtering:', n_before, '\n')
 cat('Known HTO doublets removed:', n_known_doublets, '\n')
 cat('Predicted intra-sample doublets removed:', n_predicted_doublets, '\n')
 cat('HTO singlets retained:', ncol(seurat), '\n')
+```
+
+```{r hto-filter-selected-ids, eval=isTRUE(params$use_hashtag)}
+# Apply the optional sample-sheet keep-list only after doublet detection/removal.
+hto_id_keep <- hto_id_keep_mask(
+  hash_id = seurat$hash.ID,
+  hto_ids_to_keep = params$hto_ids_to_keep,
+  available_hto_ids = rownames(seurat[['HTO']])
+)
+n_before_hto_subset <- ncol(seurat)
+seurat <- subset(seurat, cells = colnames(seurat)[hto_id_keep])
+cat(
+  'Applied HTO keep-list:',
+  if (is.na(params$hto_ids_to_keep) || !nzchar(trimws(params$hto_ids_to_keep))) {
+    'all HTOs'
+  } else {
+    params$hto_ids_to_keep
+  },
+  '; removed', n_before_hto_subset - ncol(seurat), 'cells;',
+  ncol(seurat), 'remain.\n'
+)
 ```
 
 # Cell and gene count prior to filtering

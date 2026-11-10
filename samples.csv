@@ -18,6 +18,7 @@ hto_path,,,,
 adt_path,,,,
 raw_adt_path,,,,/path/to/count-Pool-1/outs/raw_feature_bc_matrix
 hto_features,,,,Hashtag1;Hashtag2;Hashtag3
+hto_ids_to_keep,,,,
 min_nCount_ADT,NA,NA,NA,NA
 max_nCount_ADT,NA,NA,NA,NA
 dsb_background_rna_max,NA,NA,NA,NA
