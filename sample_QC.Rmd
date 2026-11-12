@@ -1148,6 +1148,7 @@ if (!is.null(hto_matrix_filtered) || !is.null(adt_matrix_filtered)) {
 
   if (!is.null(hto_matrix_filtered)) {
     seurat[['HTO']] <- CreateAssayObject(counts = hto_matrix_filtered[, common_cells, drop = FALSE])
+    invisible(hto_id_keep_mask(character(), params$hto_ids_to_keep, rownames(seurat[['HTO']])))
     cat('Attached HTO assay with', nrow(hto_matrix_filtered), 'features.\n')
   }
   if (!is.null(adt_matrix_filtered)) {

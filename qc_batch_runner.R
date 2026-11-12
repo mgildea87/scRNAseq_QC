@@ -32,6 +32,8 @@
 #   --ncores        Number of samples to render in parallel (default: 1)
 #   --merge_only    If TRUE, skip rendering and only merge existing
 #                   <sample_name>_QC.rds files (default: FALSE)
+#   --resume_merge_report If TRUE, render the merge report from existing
+#                   checkpoints without re-merging samples (default: FALSE)
 #   --skip_merge    If TRUE, skip automatic merge after successful
 #                   multi-sample rendering (default: FALSE)
 #   --run_integration If TRUE, render integrate_RNA.Rmd after a successful
@@ -67,6 +69,7 @@ print_usage_and_exit <- function(status = 0L) {
     "  --ncores <int>          Number of samples to render in parallel [default: 1]\n",
     "  --sample_name <name>    Process only one sample_name from sheet\n",
     "  --merge_only <TRUE/FALSE>  If TRUE, skip individual sample QC and only merge existing RDS files and render merged report. Requires presence of the individual <sample_name>_QC.rds files present in the sample_sheet. [default: FALSE]\n",
+    "  --resume_merge_report <TRUE/FALSE> Re-render the merge report from existing checkpoints without re-merging [default: FALSE]\n",
     "  --skip_merge <TRUE/FALSE> Skip automatic merge after successful multi-sample render [default: FALSE]\n",
     "  --run_integration <TRUE/FALSE> Run integration and render integration report after successful merge [default: FALSE]\n",
     "  --integration_template <path> Path to integrate_RNA.Rmd [default: same dir as script]\n",
@@ -92,6 +95,7 @@ parse_cli_args <- function(args) {
     ncores = 1L,
     sample_name = NULL,
     merge_only = "FALSE",
+    resume_merge_report = "FALSE",
     skip_merge = "FALSE",
     run_integration = "FALSE",
     integration_only = "FALSE",
@@ -137,11 +141,19 @@ parse_cli_args <- function(args) {
     stop(flag_name, " must be TRUE or FALSE.", call. = FALSE)
   }
   defaults$merge_only <- parse_logical_flag(defaults$merge_only, "--merge_only")
+  defaults$resume_merge_report <- parse_logical_flag(defaults$resume_merge_report, "--resume_merge_report")
   defaults$skip_merge <- parse_logical_flag(defaults$skip_merge, "--skip_merge")
   defaults$run_integration <- parse_logical_flag(defaults$run_integration, "--run_integration")
   defaults$integration_only <- parse_logical_flag(defaults$integration_only, "--integration_only")
   defaults$use_cellbender <- parse_logical_flag(defaults$use_cellbender, "--use_cellbender")
   defaults$use_soupx <- parse_logical_flag(defaults$use_soupx, "--use_soupx")
+  if (isTRUE(defaults$resume_merge_report) &&
+      (isTRUE(defaults$merge_only) || isTRUE(defaults$skip_merge) ||
+       isTRUE(defaults$run_integration) || isTRUE(defaults$integration_only) ||
+       !is.null(defaults$sample_name))) {
+    stop("--resume_merge_report cannot be combined with merge, integration, or sample-selection modes.",
+         call. = FALSE)
+  }
   if (isTRUE(defaults$use_cellbender) && isTRUE(defaults$use_soupx)) {
     stop("--use_cellbender TRUE and --use_soupx TRUE cannot be used together.", call. = FALSE)
   }
@@ -186,6 +198,7 @@ message("  use_cellbender  : ", opt$use_cellbender)
 message("  use_soupx       : ", opt$use_soupx)
 message("  hto_method      : ", opt$hto_method)
 message("  skip_merge      : ", opt$skip_merge)
+message("  resume_merge_report: ", opt$resume_merge_report)
 message("  run_integration : ", opt$run_integration)
 message("  integration_only: ", opt$integration_only)
 message("  integration_level: ", if (is.na(opt$integration_level)) "<unset>" else opt$integration_level)
@@ -309,7 +322,7 @@ if (is.null(opt$sample_sheet)) {
 }
 
 # Resolve/validate template path only when rendering is needed.
-if (!isTRUE(opt$merge_only)) {
+if (!isTRUE(opt$merge_only) && !isTRUE(opt$resume_merge_report)) {
   # Resolve template path (default: same directory as this script)
   if (is.null(opt$template)) {
     opt$template <- file.path(script_dir, "sample_QC.Rmd")
@@ -447,7 +460,7 @@ merge_sample_rds <- function(samples_df, output_dir) {
   invisible(TRUE)
 }
 
-render_merge_rmd <- function(output_dir, merge_template) {
+render_merge_rmd <- function(output_dir, merge_template, resume = FALSE) {
   if (!file.exists(merge_template)) {
     warning("Merge template not found; skipping merge report render: ", merge_template, call. = FALSE)
     return(invisible(FALSE))
@@ -466,6 +479,7 @@ render_merge_rmd <- function(output_dir, merge_template) {
     rmarkdown::render(
       input          = merge_template,
       output_file    = out_html,
+      params         = if (resume) list(resume_lisi = TRUE) else NULL,
       knit_root_dir  = output_dir,
       envir          = new.env(parent = globalenv()),
       quiet          = TRUE
@@ -521,6 +535,18 @@ render_integration_rmd <- function(output_dir, integration_template) {
     message("Integration report rendered: ", out_html)
   }
   invisible(ok)
+}
+
+# ── Resume only the merge report; never recreate the merged object.
+if (isTRUE(opt$resume_merge_report)) {
+  dir.create(opt$output_dir, showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(opt$output_dir, "chunk_logs"), showWarnings = FALSE, recursive = TRUE)
+  if (!isTRUE(render_merge_rmd(opt$output_dir, opt$merge_template, resume = TRUE))) {
+    finish_run(1L, "FAILED")
+    quit(status = 1L)
+  }
+  finish_run(0L, "SUCCESS")
+  quit(status = 0L)
 }
 
 # ── integration_only mode: render integration report from existing merged_QC.rds

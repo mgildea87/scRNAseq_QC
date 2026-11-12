@@ -2,6 +2,8 @@
 title: "Merge and analyze"
 author: "Michael Gildea"
 date: "`r Sys.Date()`"
+params:
+  resume_lisi: false
 output:
   html_document:
     keep_md: false
@@ -98,6 +100,7 @@ find_qc_support_file <- function(candidates) {
   candidate_paths <- file.path(qc_support_dir, candidates)
   candidate_paths[file.exists(candidate_paths)][1]
 }
+source(find_qc_support_file('merge_checkpoint_helpers.R'))
 ```
 
 # load merged object
@@ -112,6 +115,7 @@ seurat <- readRDS(merged_path)
 message('Loaded merged object: ', merged_path)
 
 DefaultAssay(seurat) <- 'RNA'
+merged_changed <- rna_layers_need_join(seurat[['RNA']])
 seurat <- JoinLayers(seurat, assay = 'RNA')
 
 # Detect species from feature naming conventions so TF annotation can choose
@@ -146,6 +150,7 @@ need_sct_clusters <- !'SCT_merged_clusters' %in% colnames(seurat@meta.data)
 
 options(future.globals.maxSize = 8000 * 1024^6) 
 if (need_reduction || need_clusters) {
+  merged_changed <- TRUE
   message('Computing merged normalization/reductions/clusters...')
   set.seed(1234)
   seurat <- NormalizeData(seurat, assay = 'RNA')
@@ -158,6 +163,7 @@ if (need_reduction || need_clusters) {
 }
 
 if (need_sct_reduction || need_sct_clusters) {
+  merged_changed <- TRUE
   message('Computing merged SCTransform reductions/clusters...')
   set.seed(1234)
   DefaultAssay(seurat) <- 'SCT'
@@ -167,7 +173,12 @@ if (need_sct_reduction || need_sct_clusters) {
   seurat <- FindClusters(seurat, graph.name = 'SCT_merged_snn', resolution = 0.75, algorithm = 4, cluster.name = 'SCT_merged_clusters')
 }
 
-saveRDS(seurat, file = 'merged_QC.rds')
+if (merged_changed) {
+  atomic_save_rds(seurat, merged_path)
+  message('Saved updated merged object: ', merged_path)
+} else {
+  message('Merged object is already prepared; leaving checkpoint unchanged.')
+}
 ```
 
 ## QC metric distributions
@@ -333,36 +344,43 @@ print(sct_abundance_plots$batch_plot)
 ```
 
 # LISI
-Compute LISI (Local Inverse Simpson's Index) scores from RNA and SCT PCA spaces and save them for reuse.
+Compute LISI (Local Inverse Simpson's Index) scores from RNA and SCT PCA spaces, or reuse a verified checkpoint when resuming.
 LISI quantifies local neighborhood diversity for metadata labels (here: batch and sample_name) around each cell.
 Higher LISI means stronger local mixing across label groups (typically less batch/sample separation), while lower LISI means neighborhoods are dominated by fewer labels (stronger separation).
 In practice, consistently low batch-LISI with clear batch-segregated embeddings suggests technical batch effects and supports trying integration, while moderate/high batch-LISI with biologically coherent clustering suggests integration may be unnecessary.
-```{r compute-lisi, warning=F, message=F}
+```{r compute-lisi, warning=F, message=TRUE}
 pca_rna <- seurat@reductions$PCA_RNA_merged@cell.embeddings
 pca_sct <- seurat@reductions$PCA_SCT_merged@cell.embeddings
-lisi <- list(
-  RNA = compute_lisi(pca_rna[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name')),
-  SCT = compute_lisi(pca_sct[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name'))
+label_columns <- c('batch', 'sample_name')
+lisi_inputs <- list(
+  RNA = pca_rna[, 1:30, drop = FALSE],
+  SCT = pca_sct[, 1:30, drop = FALSE],
+  metadata = seurat@meta.data[, label_columns, drop = FALSE],
+  labels = label_columns,
+  perplexity = 30,
+  nn_eps = 0,
+  lisi_version = as.character(packageVersion('lisi')),
+  rann_version = as.character(packageVersion('RANN')),
+  r_version = as.character(getRversion()),
+  implementation = body(lisi::compute_lisi)
 )
-saveRDS(lisi, file = 'lisi.rds')
+lisi_fingerprint <- checkpoint_fingerprint(lisi_inputs)
+lisi <- get_lisi_checkpoint(
+  'lisi.rds', lisi_fingerprint, isTRUE(params$resume_lisi),
+  function() list(
+    RNA = compute_lisi(lisi_inputs$RNA, lisi_inputs$metadata, label_colnames = label_columns,
+                       perplexity = 30, nn_eps = 0),
+    SCT = compute_lisi(lisi_inputs$SCT, lisi_inputs$metadata, label_colnames = label_columns,
+                       perplexity = 30, nn_eps = 0)
+  )
+)
+rm(lisi_inputs, lisi_fingerprint)
 ```
 
-Load or recompute LISI, then visualize distributions and embedding-level patterns for both methods.
+Visualize LISI distributions and embedding-level patterns for both methods.
 Histograms show the global spread of mixing scores; FeaturePlot overlays reveal where mixing is high or low in UMAP space; violin plots summarize per-cell score distributions for each label type.
 Use these plots to compare RNA vs SCT normalization in terms of local batch/sample mixing behavior.
 ```{r lisi-visualizations, fig.height=5, fig.width=7, warning=F, message=F}
-if (file.exists('lisi.rds')) {
-  lisi <- readRDS('lisi.rds')
-} else {
-  pca_rna <- seurat@reductions$PCA_RNA_merged@cell.embeddings
-  pca_sct <- seurat@reductions$PCA_SCT_merged@cell.embeddings
-  lisi <- list(
-    RNA = compute_lisi(pca_rna[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name')),
-    SCT = compute_lisi(pca_sct[, c(1:30)], seurat@meta.data, label_colnames = c('batch', 'sample_name'))
-  )
-  saveRDS(lisi, file = 'lisi.rds')
-}
-
 for (method in c('RNA', 'SCT')) {
   lisi_df <- lisi[[method]]
   reduction_name <- if (method == 'RNA') 'UMAP_RNA_merged' else 'UMAP_SCT_merged'

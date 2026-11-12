@@ -16,6 +16,7 @@ GitHub repository: https://github.com/mgildea87/scRNAseq_QC
 - Load filtered and raw count matrices (10x MEX folders or .h5 files)
 - Barcode rank (knee) plot
 - Remove genes detected in fewer than 0.1% of barcodes
+- Hash-tag demultiplexing and singlet detection
 - Compute per-cell QC metrics: UMI count, genes detected, % mitochondrial, % haemoglobin
 - Build MAD-based threshold tables for each metric
 - Pre-filter QC plots: violins, histograms, scatter pairs
@@ -34,10 +35,10 @@ GitHub repository: https://github.com/mgildea87/scRNAseq_QC
 - Load `merged_QC.rds`, detect species from feature naming, and require the merged metadata fields `batch` and `sample_name`
 - Build RNA merged reductions/clusters when missing: normalize, variable features, scale, PCA, neighbors, clustering, UMAP
 - Build SCT merged reductions/clusters when missing: PCA, neighbors, clustering, UMAP on the SCT assay
-- Save updated merged object back to `merged_QC.rds`
+- Save the updated merged object back to `merged_QC.rds` only when preprocessing changes it
 - Generate RNA and SCT dimensional reduction plots by batch/sample and by merged cluster labels
 - Compute and plot cluster abundance distributions across samples and batches (RNA and SCT cluster assignments)
-- Compute LISI scores for batch/sample_name in RNA and SCT PCA spaces, save to `lisi.rds`, and visualize histograms/FeaturePlots/violins
+- Compute LISI scores for batch/sample_name in RNA and SCT PCA spaces, save to `lisi.rds` with checkpoint provenance, and visualize histograms/FeaturePlots/violins
 - Plot QC metric distributions by cluster (for example `nCount_RNA`, `nFeature_RNA`, `percent.mt`, cell-cycle scores)
 - Run marker discovery for merged RNA and SCT clusters and render top-marker heatmaps
 - Render merged analysis report (`merge_analysis.html`)
@@ -287,7 +288,9 @@ section that:
   metadata on the saved Singlet cells.
 - If `hto_ids_to_keep` is non-blank, applies that semicolon- or comma-separated
   list after doublet removal. This does not limit the HTOs used for
-  demultiplexing or doublet detection; unknown IDs are reported as an error.
+  demultiplexing or doublet detection. Specify names as they appear in the raw
+  matrix; underscores are converted to dashes internally to match Seurat
+  feature names. Unknown IDs are reported as an error before doublet detection.
   Blank preserves all retained HTO identities.
 
 **`sample_name` vs `library_id` semantics:** for hashtagged samples,
@@ -388,7 +391,24 @@ bash /path/to/templates/QC/run_qc_batch_local.sh \
   --sample_sheet      /abs/path/to/samples.csv \
   --output_dir        /abs/path/to/results/QC \
   --integration_only  TRUE
+
+# Example: resume a failed merge report without re-merging samples
+bash /path/to/templates/QC/run_qc_batch_local.sh \
+  --sample_sheet         /abs/path/to/samples.csv \
+  --output_dir           /abs/path/to/results/QC \
+  --resume_merge_report  TRUE
 ```
+
+The resume flag is a local/batch-runner option, not a `submit_QC_batch.sh` option;
+run it on a suitably provisioned compute node. It reloads `merged_QC.rds` and
+reuses `lisi.rds` only when its companion provenance matches the current PCA
+inputs, metadata, and LISI settings. Old LISI files without provenance are
+recomputed once. A mismatched checkpoint is also recalculated, while unreadable
+or invalid provenance causes an error. Verify that the existing merged object
+is the intended dataset: resume does not compare it with the original sample
+files. Missing preprocessing is performed and saved; an already prepared object
+is not rewritten. The report starts from the beginning, so plots and other
+analyses run again. Ordinary and `--merge_only` runs still re-merge samples.
 
 ### One sample manually (RStudio or R console)
 
@@ -537,6 +557,8 @@ When the sample sheet contains more than one sample, the merge step also writes:
 |------|-------------|
 | `<output_dir>/merged_QC.rds` | Merged Seurat object produced from all `<sample_name>_QC.rds` files |
 | `<output_dir>/merge_analysis.html` | Post-merge analysis report rendered from `merge_analysis.Rmd` |
+| `<output_dir>/lisi.rds` | RNA and SCT LISI scores |
+| `<output_dir>/lisi.rds.provenance.rds` | Input and result fingerprints used to validate LISI reuse |
 
 When `--run_integration TRUE` is used and merge succeeds, the integration step can also write:
 

@@ -185,9 +185,13 @@ resolve_dsb_background_thresholds <- function(rna_size, prot_size, is_background
   )
 }
 
+normalize_feature_names <- function(names) {
+  gsub("_", "-", names, fixed = TRUE)
+}
+
 dash_feature_names <- function(mat) {
   if (is.null(mat)) return(NULL)
-  new_names <- gsub("_", "-", rownames(mat), fixed = TRUE)
+  new_names <- normalize_feature_names(rownames(mat))
   if (anyDuplicated(new_names)) {
     stop("Feature names collide after '_' -> '-' conversion: ",
          paste(unique(new_names[duplicated(new_names)]), collapse = ", "), call. = FALSE)
@@ -294,13 +298,14 @@ hto_id_keep_mask <- function(hash_id, hto_ids_to_keep = "",
     stop("hto_ids_to_keep must contain at least one HTO ID when not blank.",
          call. = FALSE)
   }
-  missing_ids <- setdiff(keep_ids, available_hto_ids)
+  normalized_keep_ids <- normalize_feature_names(keep_ids)
+  missing_ids <- keep_ids[!normalized_keep_ids %in% normalize_feature_names(available_hto_ids)]
   if (length(missing_ids) > 0L) {
     stop("Requested HTO IDs not found in the HTO assay: ",
          paste(missing_ids, collapse = ", "), call. = FALSE)
   }
 
-  !is.na(hash_id) & as.character(hash_id) %in% keep_ids
+  !is.na(hash_id) & normalize_feature_names(as.character(hash_id)) %in% normalized_keep_ids
 }
 
 resolve_hto_doublet_dimreds <- function(reduced_dim_names) {
