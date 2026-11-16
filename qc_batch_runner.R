@@ -408,6 +408,21 @@ if (anyNA(samples$filtered_path) || anyNA(samples$raw_path)) {
   )
 }
 
+if (!"use_hashtag" %in% colnames(samples)) {
+  samples$use_hashtag <- FALSE
+} else {
+  hashtag_values <- trimws(as.character(samples$use_hashtag))
+  hashtag_flags <- as.logical(hashtag_values)
+  invalid_hashtag <- !is.na(hashtag_values) & nzchar(hashtag_values) & is.na(hashtag_flags)
+  if (any(invalid_hashtag)) {
+    stop("Invalid use_hashtag value for sample(s): ",
+         paste(samples$sample_name[invalid_hashtag], collapse = ", "),
+         ". Use TRUE or FALSE.", call. = FALSE)
+  }
+  hashtag_flags[is.na(hashtag_flags)] <- FALSE
+  samples$use_hashtag <- hashtag_flags
+}
+
 # ── Merge helper ──────────────────────────────────────────────────────────────
 merge_sample_rds <- function(samples_df, output_dir) {
   if (nrow(samples_df) < 2L) {
@@ -433,6 +448,9 @@ merge_sample_rds <- function(samples_df, output_dir) {
     obj <- readRDS(rds_paths[[i]])
     obj$library_id <- samples_df$sample_name[[i]]
     obj$batch <- samples_df$batch[[i]]
+    obj$marker_sample_id <- marker_groups_for_library(
+      obj@meta.data, samples_df$sample_name[[i]], samples_df$use_hashtag[[i]]
+    )
     # Hashtagged libraries already carry per-cell sample identity (HTO_sample /
     # replicate_id) assigned by HTODemux in sample_QC.Rmd; preserve it instead
     # of overwriting with the pooled library name.
@@ -451,6 +469,7 @@ merge_sample_rds <- function(samples_df, output_dir) {
     project = "merged_QC",
     merge.data = TRUE
   )
+  validate_marker_groups(merged_obj@meta.data)
 
   merged_rds <- file.path(output_dir, "merged_QC.rds")
   message("Saving merged object: ", merged_rds)
@@ -554,7 +573,10 @@ if (isTRUE(opt$integration_only)) {
   dir.create(opt$output_dir, showWarnings = FALSE, recursive = TRUE)
   dir.create(file.path(opt$output_dir, "chunk_logs"), showWarnings = FALSE, recursive = TRUE)
   message(strrep("-", 60))
-  render_integration_rmd(opt$output_dir, opt$integration_template)
+  if (!isTRUE(render_integration_rmd(opt$output_dir, opt$integration_template))) {
+    finish_run(1L, "FAILED")
+    quit(status = 1L)
+  }
   finish_run(0L, "SUCCESS")
   quit(status = 0)
 }
@@ -602,12 +624,6 @@ for (col in threshold_cols) {
 }
 
 # ── Optional hashtag (HTO) / CITE-seq (ADT) columns ───────────────────────────
-if (!"use_hashtag" %in% colnames(samples)) {
-  samples$use_hashtag <- FALSE
-} else {
-  samples$use_hashtag <- suppressWarnings(as.logical(samples$use_hashtag))
-  samples$use_hashtag[is.na(samples$use_hashtag)] <- FALSE
-}
 if (!"hto_method" %in% colnames(samples)) {
   samples$hto_method <- opt$hto_method
 } else {

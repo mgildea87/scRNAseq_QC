@@ -421,6 +421,53 @@ align_soupx_matrices <- function(raw_counts, filtered_counts) {
   )
 }
 
+marker_groups_for_library <- function(metadata, library_id, use_hashtag) {
+  if (!isTRUE(use_hashtag)) {
+    return(rep(library_id, nrow(metadata)))
+  }
+
+  required <- c("HTO_sample", "replicate_id")
+  missing <- setdiff(required, colnames(metadata))
+  if (length(missing) > 0L) {
+    stop("Hashtagged library '", library_id, "' is missing metadata: ",
+         paste(missing, collapse = ", "), ". Re-run its sample QC.", call. = FALSE)
+  }
+  hto <- as.character(metadata$HTO_sample)
+  replicate <- as.character(metadata$replicate_id)
+  if (anyNA(hto) || any(!nzchar(trimws(hto))) ||
+      anyNA(replicate) || any(!nzchar(trimws(replicate))) ||
+      any(replicate != paste(library_id, hto, sep = "_"))) {
+    stop("Invalid HTO_sample or replicate_id for library '", library_id,
+         "'. Re-run its sample QC to restore library-qualified replicate IDs.",
+         call. = FALSE)
+  }
+  replicate
+}
+
+validate_marker_groups <- function(metadata) {
+  required <- c("marker_sample_id", "library_id")
+  missing <- setdiff(required, colnames(metadata))
+  if (length(missing) > 0L) {
+    stop("Merged object is missing marker grouping metadata: ",
+         paste(missing, collapse = ", "),
+         ". Re-merge the per-sample QC objects before rendering this report.",
+         call. = FALSE)
+  }
+  groups <- as.character(metadata$marker_sample_id)
+  libraries <- as.character(metadata$library_id)
+  if (anyNA(groups) || any(!nzchar(trimws(groups))) ||
+      anyNA(libraries) || any(!nzchar(trimws(libraries)))) {
+    stop("Marker grouping or library IDs are missing or blank. Re-merge the per-sample QC objects.",
+         call. = FALSE)
+  }
+  pairs <- unique(data.frame(group = groups, library = libraries, stringsAsFactors = FALSE))
+  if (anyDuplicated(pairs$group)) {
+    stop("Marker sample IDs are shared across libraries. Resolve the conflicting IDs and re-merge.",
+         call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
 load_transposed_sample_sheet <- function(path,
                                          required_fields = c("sample_name", "filtered_path", "raw_path")) {
   sheet <- read.csv(

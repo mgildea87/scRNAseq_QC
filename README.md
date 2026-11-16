@@ -300,6 +300,20 @@ per-cell `HTO_sample` (biological identity from the hashtag call) instead of
 being overwritten with the library name. Non-hashtagged samples are
 unaffected (`sample_name` == `library_id` == the sample-sheet name).
 
+**Marker pseudobulk identity:** merging adds `marker_sample_id`. For
+hashtagged cells it is the library-qualified `replicate_id`
+(`<sample_name>_<hash.ID>`); for non-hashtagged cells it is the sample-sheet
+name. Both merged and integrated `FindMarkersBulk` analyses group by this
+column, independently of the integration level and `sample_name`. Missing HTO
+replicate IDs or marker IDs shared across libraries cause an error.
+
+Existing merged checkpoints created before this change lack `marker_sample_id`
+and must be rebuilt from the per-sample QC RDS files with `--merge_only TRUE`
+before resuming either report. Rerun the marker analyses after re-merging; old
+marker results are not updated automatically. Use a separate output directory
+containing copies of the per-sample QC RDS files if the original results need
+to be retained.
+
 ### CITE-seq (ADT) processing
 
 When `use_adt` is TRUE, ADT count QC runs with the pre-filter RNA metrics.

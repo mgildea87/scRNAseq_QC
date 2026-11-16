@@ -93,7 +93,7 @@ knitr::knit_hooks$set(document = function(x) {
   x
 })
 
-template_dir <- normalizePath(knitr::current_input(dir = TRUE), mustWork = FALSE)
+template_dir <- dirname(normalizePath(knitr::current_input(dir = TRUE), mustWork = TRUE))
 qc_support_dir <- file.path(template_dir, 'support_files')
 
 find_qc_support_file <- function(candidates) {
@@ -101,6 +101,7 @@ find_qc_support_file <- function(candidates) {
   candidate_paths[file.exists(candidate_paths)][1]
 }
 source(find_qc_support_file('merge_checkpoint_helpers.R'))
+source(find_qc_support_file('qc_helpers.R'))
 ```
 
 # load merged object
@@ -113,6 +114,7 @@ if (!file.exists(merged_path)) {
 
 seurat <- readRDS(merged_path)
 message('Loaded merged object: ', merged_path)
+validate_marker_groups(seurat@meta.data)
 
 DefaultAssay(seurat) <- 'RNA'
 merged_changed <- rna_layers_need_join(seurat[['RNA']])
@@ -212,7 +214,6 @@ qc.metrics |>
   ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.Ribosomal)) +
   geom_point() +
   scale_color_viridis_c()+
-  ggtitle("Example of plotting QC metrics") +
   theme_minimal()+
   facet_wrap(~sample_name)
 
@@ -221,7 +222,6 @@ qc.metrics |>
   ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.Ribosomal)) +
   geom_point() +
   scale_color_viridis_c()+
-  ggtitle("Example of plotting QC metrics") +
   theme_minimal()+
   facet_wrap(~sample_name)+
   scale_x_log10() +
@@ -232,7 +232,6 @@ qc.metrics |>
   ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.mt)) +
   geom_point() +
   scale_color_viridis_c()+
-  ggtitle("Example of plotting QC metrics") +
   theme_minimal()+
   facet_wrap(~sample_name)
 
@@ -241,7 +240,6 @@ qc.metrics |>
   ggplot(aes(nCount_RNA, nFeature_RNA, colour = percent.mt)) +
   geom_point() +
   scale_color_viridis_c()+
-  ggtitle("Example of plotting QC metrics") +
   theme_minimal()+
   facet_wrap(~sample_name)+
   scale_x_log10() +
@@ -453,8 +451,8 @@ for (feature_name in qc_features) {
 # Differential expression (cluster markers)
 Run pseudobulk-style cluster marker discovery for log-norm and SCT cluster labels.
 ```{r differential-expression-markers, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'RNA_merged_clusters', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNormalize')
-FindMarkersBulk(seurat, clus_ident = 'SCT_merged_clusters', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
+FindMarkersBulk(seurat, clus_ident = 'RNA_merged_clusters', sample_ident = 'marker_sample_id', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_LogNormalize')
+FindMarkersBulk(seurat, clus_ident = 'SCT_merged_clusters', sample_ident = 'marker_sample_id', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_merged_SCT')
 ```
 
 ## Top marker heatmap log-norm

@@ -127,6 +127,9 @@ if (!file.exists(params$merged_rds_path)) {
   stop('Merged RDS not found: ', params$merged_rds_path)
 }
 seurat <- readRDS(params$merged_rds_path)
+template_dir <- dirname(normalizePath(knitr::current_input(dir = TRUE), mustWork = TRUE))
+source(file.path(template_dir, 'support_files', 'qc_helpers.R'))
+validate_marker_groups(seurat@meta.data)
 
 rna_features <- rownames(seurat[['RNA']])
 malat1_candidates <- c('MALAT1', 'Malat1')
@@ -360,7 +363,7 @@ plot_doublet_frequency('RNA_rpca_clusters_0.75', 'RPCA log-norm')
 Marker discovery: run bulk-style marker analysis across integrated clusters.
 ```{r find-cluster-markers, eval = T, warning=F, message=F}
 seurat <- JoinLayers(seurat, assay = 'RNA')
-FindMarkersBulk(seurat, clus_ident = 'RNA_rpca_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated_rpca')
+FindMarkersBulk(seurat, clus_ident = 'RNA_rpca_clusters_0.75', sample_ident = 'marker_sample_id', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated_rpca')
 ```
 
 ### Top marker heatmap RNA
@@ -473,7 +476,7 @@ plot_doublet_frequency('SCT_rpca_clusters_0.75', 'RPCA SCT')
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across SCT-integrated clusters.
 ```{r find-cluster-markers-sct, eval = T, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'SCT_rpca_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_SCT_integrated_rpca')
+FindMarkersBulk(seurat, clus_ident = 'SCT_rpca_clusters_0.75', sample_ident = 'marker_sample_id', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_SCT_integrated_rpca')
 ```
 
 ## Top marker heatmap SCT
@@ -574,7 +577,7 @@ plot_doublet_frequency('RNA_harmony_clusters_0.75', 'Harmony log-norm')
 Marker discovery: run bulk-style marker analysis across RNA Harmony clusters.
 ```{r find-cluster-markers-harmony-rna, eval = T, warning=F, message=F}
 seurat <- JoinLayers(seurat, assay = 'RNA')
-FindMarkersBulk(seurat, clus_ident = 'RNA_harmony_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated_harmony')
+FindMarkersBulk(seurat, clus_ident = 'RNA_harmony_clusters_0.75', sample_ident = 'marker_sample_id', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_RNA_integrated_harmony')
 ```
 
 ## Top marker heatmap RNA Harmony
@@ -671,7 +674,7 @@ plot_doublet_frequency('SCT_harmony_clusters_0.75', 'Harmony SCT')
 ## Differential expression (cluster markers)
 Marker discovery: run bulk-style marker analysis across SCT Harmony clusters.
 ```{r find-cluster-markers-harmony-sct, eval = T, warning=F, message=F}
-FindMarkersBulk(seurat, clus_ident = 'SCT_harmony_clusters_0.75', sample_ident = 'sample_name', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_SCT_integrated_harmony')
+FindMarkersBulk(seurat, clus_ident = 'SCT_harmony_clusters_0.75', sample_ident = 'marker_sample_id', n_top_genes = 15, assay = 'RNA', out_dir = 'FindMarkersBulk_SCT_integrated_harmony')
 ```
 
 ## Top marker heatmap SCT Harmony

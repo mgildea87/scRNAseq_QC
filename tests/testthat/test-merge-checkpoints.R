@@ -55,6 +55,8 @@ testthat::test_that("merged object is saved only when preprocessing changes it",
   object <- Seurat::CreateSeuratObject(Matrix::Matrix(counts, sparse = TRUE))
   object$batch <- rep(c("A", "B"), each = 6)
   object$sample_name <- object$batch
+  object$library_id <- object$batch
+  object$marker_sample_id <- object$batch
   object$RNA_merged_clusters <- rep("0", 12)
   object$SCT_merged_clusters <- rep("0", 12)
   for (reduction in c("PCA_RNA_merged", "UMAP_RNA_merged",
@@ -78,12 +80,18 @@ testthat::test_that("merged object is saved only when preprocessing changes it",
   code <- paste(lines[(start + 1L):(end - 1L)], collapse = "\n")
   env <- new.env(parent = asNamespace("Seurat"))
   env$rna_layers_need_join <- rna_layers_need_join
+  env$validate_marker_groups <- validate_marker_groups
   writes <- 0L
   env$atomic_save_rds <- function(object, path) {
     writes <<- writes + 1L
     atomic_save_rds(object, path)
   }
 
+  old_object <- object
+  old_object$marker_sample_id <- NULL
+  saveRDS(old_object, "merged_QC.rds")
+  testthat::expect_error(eval(parse(text = code), env), "Re-merge the per-sample QC objects")
+  saveRDS(object, "merged_QC.rds")
   eval(parse(text = code), env)
   testthat::expect_equal(writes, 1L)
   testthat::expect_false(rna_layers_need_join(readRDS("merged_QC.rds")[["RNA"]]))
@@ -105,6 +113,140 @@ testthat::test_that("merged object is saved only when preprocessing changes it",
   eval(parse(text = code), env)
   testthat::expect_equal(writes, 2L)
   testthat::expect_true("PCA_RNA_merged" %in% names(readRDS("merged_QC.rds")@reductions))
+})
+
+testthat::test_that("marker grouping rejects incomplete or ambiguous identities", {
+  metadata <- data.frame(HTO_sample = c("tag1", "tag2"),
+                         replicate_id = c("A_tag1", "A_tag2"))
+  testthat::expect_identical(marker_groups_for_library(metadata, "A", TRUE),
+                             c("A_tag1", "A_tag2"))
+  testthat::expect_identical(marker_groups_for_library(metadata, "B", FALSE), c("B", "B"))
+  testthat::expect_error(marker_groups_for_library(metadata["HTO_sample"], "A", TRUE),
+                         "missing metadata")
+  metadata$replicate_id[[2L]] <- NA_character_
+  testthat::expect_error(marker_groups_for_library(metadata, "A", TRUE), "Invalid HTO_sample or replicate_id")
+  metadata$replicate_id[[2L]] <- "B_tag2"
+  testthat::expect_error(marker_groups_for_library(metadata, "A", TRUE), "Invalid HTO_sample or replicate_id")
+  testthat::expect_error(validate_marker_groups(data.frame(sample_name = "A")),
+                         "Re-merge the per-sample QC objects")
+  testthat::expect_error(validate_marker_groups(data.frame(marker_sample_id = c("tag", "tag"),
+                                                           library_id = c("A", "B"))),
+                         "shared across libraries")
+  testthat::expect_error(validate_marker_groups(data.frame(marker_sample_id = NA_character_,
+                                                           library_id = "A")), "missing or blank")
+})
+
+testthat::test_that("ordinary and merge-only runs retain distinct HTO replicates", {
+  testthat::skip_if_not_installed("Seurat")
+  testthat::skip_if_not_installed("rmarkdown")
+  testthat::skip_if_not(rmarkdown::pandoc_available())
+  work <- tempfile("marker-merge-")
+  dir.create(work)
+  sheet_path <- file.path(work, "samples.csv")
+  write_transposed_sample_sheet(sheet_path, c("A", "B", "C"))
+  sheet <- read.csv(sheet_path, colClasses = "character", check.names = FALSE)
+  sheet[sheet$field == "use_hashtag", c("A", "B", "C")] <- c("TRUE", "TRUE", "FALSE")
+  write.csv(sheet, sheet_path, row.names = FALSE, na = "NA")
+
+  sample_template <- file.path(work, "sample.Rmd")
+  param_names <- names(rmarkdown::yaml_front_matter(file.path(repo_root, "sample_QC.Rmd"))$params)
+  writeLines(c("---", "output: html_document", "params:",
+               paste0("  ", param_names, ": ''"), "---",
+               "```{r}",
+               "stopifnot(identical(params$use_hashtag, params$sample_name != 'C'))",
+               "```"), sample_template)
+  merge_template <- file.path(work, "merge.Rmd")
+  writeLines(c("---", "output: html_document", "---", "Merged."), merge_template)
+  runner <- file.path(repo_root, "qc_batch_runner.R")
+
+  for (merge_only in c(TRUE, FALSE)) {
+    output_dir <- file.path(work, if (merge_only) "merge-only" else "ordinary")
+    dir.create(output_dir)
+    for (library in c("A", "B", "C")) {
+      counts <- Matrix::Matrix(matrix(1, nrow = 2, ncol = 2,
+                                      dimnames = list(c("g1", "g2"), c("cell1", "cell2"))),
+                               sparse = TRUE)
+      object <- Seurat::CreateSeuratObject(counts)
+      if (library != "C") {
+        object$HTO_sample <- c("tag1", "tag2")
+        object$replicate_id <- paste(library, object$HTO_sample, sep = "_")
+      }
+      saveRDS(object, file.path(output_dir, paste0(library, "_QC.rds")))
+    }
+    args <- c("--vanilla", shQuote(runner), "--sample_sheet", shQuote(sheet_path),
+              "--output_dir", shQuote(output_dir), "--template", shQuote(sample_template),
+              "--merge_template", shQuote(merge_template),
+              "--merge_only", if (merge_only) "TRUE" else "FALSE")
+    output <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"), args,
+                                       stdout = TRUE, stderr = TRUE))
+    status <- attr(output, "status")
+    testthat::expect_true(is.null(status) || status == 0L, info = paste(output, collapse = "\n"))
+    testthat::expect_true(file.exists(file.path(output_dir, "merge_analysis.html")))
+    merged <- readRDS(file.path(output_dir, "merged_QC.rds"))
+    metadata <- merged@meta.data
+    testthat::expect_identical(sort(unique(metadata$marker_sample_id)),
+                               c("A_tag1", "A_tag2", "B_tag1", "B_tag2", "C"))
+    testthat::expect_identical(sort(unique(metadata$sample_name[metadata$library_id == "A"])),
+                               c("tag1", "tag2"))
+    testthat::expect_true(all(metadata$sample_name[metadata$library_id == "C"] == "C"))
+  }
+
+  sheet[sheet$field == "use_hashtag", "B"] <- "invalid"
+  write.csv(sheet, sheet_path, row.names = FALSE, na = "NA")
+  output <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+                                     c("--vanilla", shQuote(runner), "--sample_sheet", shQuote(sheet_path),
+                                       "--output_dir", shQuote(file.path(work, "invalid")),
+                                       "--merge_only", "TRUE"),
+                                     stdout = TRUE, stderr = TRUE))
+  testthat::expect_false(is.null(attr(output, "status")))
+  testthat::expect_match(paste(output, collapse = "\n"), "Invalid use_hashtag value")
+})
+
+testthat::test_that("all marker reports use the marker sample grouping", {
+  for (file in c("merge_analysis.Rmd", "integrate_RNA.Rmd")) {
+    lines <- readLines(file.path(repo_root, file), warn = FALSE)
+    calls <- grep("^FindMarkersBulk\\(", lines, value = TRUE)
+    testthat::expect_length(calls, if (file == "merge_analysis.Rmd") 2L else 4L)
+    testthat::expect_true(all(grepl("sample_ident = 'marker_sample_id'", calls, fixed = TRUE)))
+  }
+})
+
+testthat::test_that("legacy checkpoints fail both report resume paths", {
+  for (package in c("Seurat", "rmarkdown", "lisi", "CVRCFunc", "harmony", "pheatmap")) {
+    testthat::skip_if_not_installed(package)
+  }
+  testthat::skip_if_not(rmarkdown::pandoc_available())
+  work <- tempfile("legacy-marker-checkpoint-")
+  dir.create(work)
+  dir.create(file.path(work, "support_files"))
+  for (file in c("qc_helpers.R", "merge_checkpoint_helpers.R")) {
+    file.copy(file.path(repo_root, "support_files", file), file.path(work, "support_files", file))
+  }
+  for (file in c("merge_analysis.Rmd", "integrate_RNA.Rmd")) {
+    file.copy(file.path(repo_root, file), file.path(work, file))
+  }
+  sheet <- file.path(work, "samples.csv")
+  write_transposed_sample_sheet(sheet)
+  counts <- Matrix::Matrix(matrix(1, nrow = 2, ncol = 2,
+                                  dimnames = list(c("g1", "g2"), c("cell1", "cell2"))),
+                           sparse = TRUE)
+  object <- Seurat::CreateSeuratObject(counts)
+  object$sample_name <- "A"
+  object$library_id <- "A"
+  object$batch <- "A"
+  saveRDS(object, file.path(work, "merged_QC.rds"))
+  runner <- file.path(repo_root, "qc_batch_runner.R")
+  common <- c("--vanilla", shQuote(runner), "--sample_sheet", shQuote(sheet),
+              "--output_dir", shQuote(work))
+  for (args in list(c("--resume_merge_report", "TRUE", "--merge_template",
+                       shQuote(file.path(work, "merge_analysis.Rmd"))),
+                    c("--integration_only", "TRUE", "--integration_template",
+                      shQuote(file.path(work, "integrate_RNA.Rmd"))))) {
+    output <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"), c(common, args),
+                                       stdout = TRUE, stderr = TRUE))
+    testthat::expect_false(is.null(attr(output, "status")), info = paste(output, collapse = "\n"))
+    testthat::expect_match(paste(output, collapse = "\n"), "Re-merge the per-sample QC objects")
+  }
 })
 
 testthat::test_that("the report computes and resumes real LISI results", {
